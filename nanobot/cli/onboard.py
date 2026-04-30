@@ -665,13 +665,19 @@ def _configure_pydantic_model(
             items.append(f"{display}: {formatted}")
         return items + ["[Done]"]
 
-    last_choice: str | None = None
+    last_field_name: str | None = None
     while True:
         console.clear()
         _show_config_panel(display_name, working_model, fields)
         choices = get_choices()
+        default_choice = None
+        if last_field_name:
+            for idx, (fname, _) in enumerate(fields):
+                if fname == last_field_name:
+                    default_choice = choices[idx]
+                    break
         answer = _select_with_back(
-            "Select field to configure:", choices, default=last_choice
+            "Select field to configure:", choices, default=default_choice
         )
 
         if answer is _BACK_PRESSED or answer is None:
@@ -679,11 +685,11 @@ def _configure_pydantic_model(
         if answer == "[Done]":
             return working_model
 
-        last_choice = answer
-
         field_idx = next((i for i, c in enumerate(choices) if c == answer), -1)
         if field_idx < 0 or field_idx >= len(fields):
             return None
+
+        last_field_name = fields[field_idx][0]
 
         field_name, field_info = fields[field_idx]
         current_value = getattr(working_model, field_name, None)
@@ -798,7 +804,7 @@ def _configure_model_presets(config: Config) -> None:
         choices.append("<- Back")
         return choices
 
-    last_choice: str | None = None
+    last_preset_name: str | None = None
     while True:
         try:
             console.clear()
@@ -807,15 +813,20 @@ def _configure_model_presets(config: Config) -> None:
                 "Create, edit or delete named model presets for quick switching",
             )
             choices = get_preset_choices()
+            default_choice = None
+            if last_preset_name:
+                for c in choices:
+                    if c.startswith(last_preset_name + " ("):
+                        default_choice = c
+                        break
             answer = _select_with_back(
-                "Select preset:", choices, default=last_choice
+                "Select preset:", choices, default=default_choice
             )
 
             if answer is _BACK_PRESSED or answer is None or answer == "<- Back":
                 break
 
             assert isinstance(answer, str)
-            last_choice = answer
 
             if answer == "[+] Add new preset":
                 name_input = _get_questionary().text(
@@ -834,6 +845,7 @@ def _configure_model_presets(config: Config) -> None:
                 if updated is not None:
                     config.model_presets[name] = updated
                     _sync_preset_cache(config)
+                    last_preset_name = name
                 continue
 
             # Editing / deleting an existing preset
@@ -842,6 +854,8 @@ def _configure_model_presets(config: Config) -> None:
             preset = config.model_presets.get(preset_name)
             if preset is None:
                 continue
+
+            last_preset_name = preset_name
 
             action = _select_with_back(
                 f"Preset: {preset_name}",
@@ -859,6 +873,7 @@ def _configure_model_presets(config: Config) -> None:
                 if confirm:
                     del config.model_presets[preset_name]
                     _sync_preset_cache(config)
+                    last_preset_name = None
                 continue
 
             if action == "Edit":
@@ -934,14 +949,22 @@ def _configure_providers(config: Config) -> None:
                 choices.append(display)
         return choices + ["<- Back"]
 
-    last_choice: str | None = None
+    last_provider_key: str | None = None
     while True:
         try:
             console.clear()
             _show_section_header("LLM Providers", "Select a provider to configure API key and endpoint")
             choices = get_provider_choices()
+            default_choice = None
+            if last_provider_key:
+                display = _get_provider_names().get(last_provider_key)
+                if display:
+                    for c in choices:
+                        if c.replace(" *", "") == display:
+                            default_choice = c
+                            break
             answer = _select_with_back(
-                "Select provider:", choices, default=last_choice
+                "Select provider:", choices, default=default_choice
             )
 
             if answer is _BACK_PRESSED or answer is None or answer == "<- Back":
@@ -949,12 +972,12 @@ def _configure_providers(config: Config) -> None:
 
             # Type guard: answer is now guaranteed to be a string
             assert isinstance(answer, str)
-            last_choice = answer
             # Extract provider name from choice (remove " *" suffix if present)
             provider_name = answer.replace(" *", "")
             # Find the actual provider key from display names
             for name, display in _get_provider_names().items():
                 if display == provider_name:
+                    last_provider_key = name
                     _configure_provider(config, name)
                     break
 
