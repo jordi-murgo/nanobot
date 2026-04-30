@@ -921,9 +921,12 @@ def _configure_model_presets(config: Config) -> None:
 
             last_preset_name = preset_name
 
+            choices = ["Edit", "Cancel"]
+            if preset_name != "default":
+                choices.insert(1, "Delete")
             action = _select_with_back(
                 f"Preset: {preset_name}",
-                ["Edit", "Delete", "Cancel"],
+                choices,
                 default="Edit",
             )
             if action is _BACK_PRESSED or action == "Cancel" or action is None:

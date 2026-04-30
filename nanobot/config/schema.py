@@ -275,23 +275,37 @@ class Config(BaseSettings):
     model_presets: dict[str, ModelPresetConfig] = Field(default_factory=dict)
 
     @model_validator(mode="after")
+    def _sync_default_preset(self) -> "Config":
+        """Expose agents.defaults model fields as the implicit 'default' preset.
+
+        This guarantees that ``model_presets`` is never empty and that legacy
+        configs (which only set ``agents.defaults.model`` etc.) continue to work
+        without explicitly declaring a preset.
+        """
+        d = self.agents.defaults
+        if "default" not in self.model_presets:
+            self.model_presets["default"] = ModelPresetConfig(
+                model=d.model,
+                provider=d.provider,
+                max_tokens=d.max_tokens,
+                context_window_tokens=d.context_window_tokens,
+                temperature=d.temperature,
+                reasoning_effort=d.reasoning_effort,
+            )
+        if d.model_preset is None:
+            d.model_preset = "default"
+        return self
+
+    @model_validator(mode="after")
     def _validate_model_preset(self) -> "Config":
         name = self.agents.defaults.model_preset
-        if name and name not in self.model_presets:
+        if name not in self.model_presets:
             raise ValueError(f"model_preset {name!r} not found in model_presets")
         return self
 
     def resolve_preset(self) -> ModelPresetConfig:
-        """Return effective model params: from active preset, or individual defaults."""
-        name = self.agents.defaults.model_preset
-        if name:
-            return self.model_presets[name]
-        d = self.agents.defaults
-        return ModelPresetConfig(
-            model=d.model, provider=d.provider, max_tokens=d.max_tokens,
-            context_window_tokens=d.context_window_tokens,
-            temperature=d.temperature, reasoning_effort=d.reasoning_effort,
-        )
+        """Return the active preset (never falls back to manual field construction)."""
+        return self.model_presets[self.agents.defaults.model_preset]
 
     @property
     def workspace_path(self) -> Path:
