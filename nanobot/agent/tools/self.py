@@ -415,8 +415,8 @@ class MyTool(Tool):
                         f"REJECTED type mismatch {key}: expects {old_t.__name__}, got {new_t.__name__}",
                     )
                     return f"Error: '{key}' expects {old_t.__name__}, got {new_t.__name__}"
-            # When model is set directly, it no longer matches any preset
-            if key == "model":
+            # When a model-specific field is set directly, it no longer matches any preset
+            if key in ("model", "context_window_tokens"):
                 self._loop._active_preset = None
             try:
                 setattr(self._loop, key, value)

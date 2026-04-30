@@ -275,8 +275,9 @@ class Config(BaseSettings):
     model_presets: dict[str, ModelPresetConfig] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _sync_default_preset(self) -> "Config":
-        """Expose agents.defaults model fields as the implicit 'default' preset.
+    def _sync_and_validate_preset(self) -> "Config":
+        """Expose agents.defaults model fields as the implicit 'default' preset
+        and validate the active preset reference.
 
         This guarantees that ``model_presets`` is never empty and that legacy
         configs (which only set ``agents.defaults.model`` etc.) continue to work
@@ -294,13 +295,8 @@ class Config(BaseSettings):
             )
         if d.model_preset is None:
             d.model_preset = "default"
-        return self
-
-    @model_validator(mode="after")
-    def _validate_model_preset(self) -> "Config":
-        name = self.agents.defaults.model_preset
-        if name not in self.model_presets:
-            raise ValueError(f"model_preset {name!r} not found in model_presets")
+        if d.model_preset not in self.model_presets:
+            raise ValueError(f"model_preset {d.model_preset!r} not found in model_presets")
         return self
 
     def resolve_preset(self) -> ModelPresetConfig:

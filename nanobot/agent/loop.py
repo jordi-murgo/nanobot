@@ -376,7 +376,7 @@ class AgentLoop:
         return self._active_preset
 
     @model_preset.setter
-    def model_preset(self, name: str | None) -> None:
+    def model_preset(self, name: str) -> None:
         """Resolve a preset by name and apply all fields atomically."""
         if not isinstance(name, str) or not name.strip():
             raise ValueError("model_preset must be a non-empty string")

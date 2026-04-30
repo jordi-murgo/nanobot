@@ -127,15 +127,16 @@ class ModelRouter(LLMProvider):
             if not self._should_failover(response):
                 return response
 
+            failed_label = label
             try:
                 label, provider, model = next(candidates)
             except StopIteration:
-                logger.warning("LLM failover exhausted after model={}", label)
+                logger.warning("LLM failover exhausted after model={}", failed_label)
                 return response
 
             logger.warning(
                 "LLM failover model={} next_model={} status={} kind={}",
-                label,
+                failed_label,
                 label,
                 response.error_status_code,
                 response.error_kind or response.error_type or response.error_code or "unknown",
