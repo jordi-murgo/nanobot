@@ -85,12 +85,3 @@ async def test_check_model_presets_shows_available() -> None:
     assert "ds" in result
 
 
-async def test_set_model_directly_clears_preset() -> None:
-    presets = {"gpt5": ModelPresetConfig(model="gpt-5", provider="openai")}
-    loop, tool = _make_loop(presets)
-    await tool.execute(action="set", key="model_preset", value="gpt5")
-    assert loop._active_preset == "gpt5"
-
-    await tool.execute(action="set", key="model", value="other-model")
-    assert loop._active_preset is None
-    assert loop.model == "other-model"

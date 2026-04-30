@@ -35,6 +35,7 @@ def _make_mock_loop(**overrides):
     loop._concurrency_gate = None
     loop._unified_session = False
     loop._extra_hooks = []
+    loop.model_preset = None
 
     # web_config mock — needed for check tests
     loop.web_config = MagicMock()
@@ -76,7 +77,7 @@ class TestInspectSummary:
         tool = _make_tool()
         result = await tool.execute(action="check")
         assert "max_iterations: 40" in result
-        assert "context_window_tokens: 65536" in result
+        assert "model_preset" in result
 
     @pytest.mark.asyncio
     async def test_inspect_includes_runtime_vars(self):
@@ -92,8 +93,7 @@ class TestInspectSummary:
         tool = _make_tool()
         result = await tool.execute(action="check")
         assert "max_iterations" in result
-        assert "context_window_tokens" in result
-        assert "model" in result
+        assert "model_preset" in result
         assert "workspace" in result
         assert "provider_retry_mode" in result
         assert "max_tool_result_chars" in result

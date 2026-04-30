@@ -76,8 +76,6 @@ class MyTool(Tool):
 
     RESTRICTED: dict[str, dict[str, Any]] = {
         "max_iterations":        {"type": int, "min": 1,   "max": 100},
-        "context_window_tokens": {"type": int, "min": 4096, "max": 1_000_000},
-        "model":                 {"type": str, "min_len": 1},
     }
 
     _MAX_RUNTIME_KEYS = 64
@@ -118,13 +116,14 @@ class MyTool(Tool):
             "Scratchpad keys persist across turns but not restarts.\n"
             "Key values: _current_iteration (current progress), "
             "max_iterations - _current_iteration = remaining iterations.\n"
+            "Use 'model_preset' to switch the active model preset.\n"
             "Note: web_config and exec_config are readable but read-only.\n"
             "\n"
             "When to use:\n"
             "- User asks about your model, settings, or token usage → check that key.\n"
             "- A tool fails or behaves unexpectedly → check the related config to diagnose.\n"
             "- User asks you to remember a preference for this session → set to store it in your scratchpad.\n"
-            "- About to start a large task → check context_window_tokens and max_iterations first."
+            "- About to start a large task → check max_iterations and model_preset first."
         )
         if not self._modify_allowed:
             base += "\nREAD-ONLY MODE: set is disabled."
@@ -132,7 +131,7 @@ class MyTool(Tool):
             base += (
                 "\nIMPORTANT: Before setting state, predict the potential impact. "
                 "If the operation could cause crashes or instability "
-                "(e.g. changing model), warn the user first."
+                "(e.g. changing model_preset), warn the user first."
             )
         return base
 
@@ -148,7 +147,7 @@ class MyTool(Tool):
                 },
                 "key": {
                     "type": "string",
-                    "description": "Dot-path for check/set. Examples: 'max_iterations', 'workspace', 'provider_retry_mode'. "
+                    "description": "Dot-path for check/set. Examples: 'max_iterations', 'model_preset', 'provider_retry_mode'. "
                     "For check without key, shows all config values.",
                 },
                 "value": {"description": "New value (for set). Type must match target (int for max_iterations/context_window_tokens, str for model)."},

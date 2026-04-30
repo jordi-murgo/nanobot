@@ -316,7 +316,7 @@ class AgentLoop:
             model=self.model,
         )
         self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}
-        self._active_preset: str | None = model_preset if model_presets and model_preset in model_presets else None
+        self._active_preset: str | None = model_preset if model_preset in self.model_presets else None
         self._register_default_tools()
         if _tc.my.enable:
             self.tools.register(MyTool(loop=self, modify_allowed=_tc.my.allow_set))
@@ -353,8 +353,10 @@ class AgentLoop:
         self.consolidator.set_provider(provider, model, context_window_tokens)
         self.dream.set_provider(provider, model)
         self._provider_signature = snapshot.signature
-        if self._active_preset and self.model_presets.get(self._active_preset, ModelPresetConfig(model="")).model != model:
-            self._active_preset = None
+        if self._active_preset:
+            preset = self.model_presets.get(self._active_preset)
+            if preset and preset.model != model:
+                self._active_preset = None
         logger.info("Runtime model switched for next turn: {} -> {}", old_model, model)
 
     def _refresh_provider_snapshot(self) -> None:
