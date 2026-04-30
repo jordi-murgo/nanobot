@@ -519,7 +519,7 @@ def serve(
     bus = MessageBus()
     provider = _make_provider(runtime_config)
     defaults = runtime_config.agents.defaults
-    pf = make_provider_factory(runtime_config) if defaults.fallback_models else None
+    pf = make_provider_factory(runtime_config)
     session_manager = SessionManager(runtime_config.workspace_path)
     _resolved = runtime_config.resolve_preset()
     agent_loop = _make_agent_loop(
@@ -601,7 +601,7 @@ def _run_gateway(
     bus = MessageBus()
     provider = _make_provider(config)
     gw_defaults = config.agents.defaults
-    gw_pf = make_provider_factory(config) if gw_defaults.fallback_models else None
+    gw_pf = make_provider_factory(config)
     try:
         provider_snapshot = build_provider_snapshot(config)
     except ValueError as exc:
@@ -978,7 +978,7 @@ def agent(
     bus = MessageBus()
     provider = _make_provider(config)
     chat_defaults = config.agents.defaults
-    chat_pf = make_provider_factory(config) if chat_defaults.fallback_models else None
+    chat_pf = make_provider_factory(config)
 
     # Preserve existing single-workspace installs, but keep custom workspaces clean.
     if is_default_workspace(config.workspace_path):

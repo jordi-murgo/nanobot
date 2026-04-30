@@ -385,28 +385,21 @@ class AgentLoop:
         p = self.model_presets[name]
         self.model = p.model
         self.context_window_tokens = p.context_window_tokens
-        if getattr(self, "provider_factory", None) is not None:
-            new_provider = self.provider_factory(name)
-            if self.fallback_models:
-                from nanobot.providers.failover import ModelRouter
-                new_provider = ModelRouter(
-                    primary_provider=new_provider,
-                    primary_model=p.model,
-                    fallback_models=self.fallback_models,
-                    provider_factory=self.provider_factory,
-                )
-            if new_provider is not self.provider:
-                self.provider = new_provider
-                self.runner.provider = new_provider
-                self.subagents.set_provider(new_provider, p.model)
-                self.consolidator.set_provider(new_provider, p.model, p.context_window_tokens)
-                self.dream.set_provider(new_provider, p.model)
-        else:
-            self.provider.generation = GenerationSettings(
-                temperature=p.temperature,
-                max_tokens=p.max_tokens,
-                reasoning_effort=p.reasoning_effort,
+        new_provider = self.provider_factory(name)
+        if self.fallback_models:
+            from nanobot.providers.failover import ModelRouter
+            new_provider = ModelRouter(
+                primary_provider=new_provider,
+                primary_model=p.model,
+                fallback_models=self.fallback_models,
+                provider_factory=self.provider_factory,
             )
+        if new_provider is not self.provider:
+            self.provider = new_provider
+            self.runner.provider = new_provider
+            self.subagents.set_provider(new_provider, p.model)
+            self.consolidator.set_provider(new_provider, p.model, p.context_window_tokens)
+            self.dream.set_provider(new_provider, p.model)
         self._active_preset = name
 
     def _register_default_tools(self) -> None:

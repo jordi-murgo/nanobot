@@ -65,7 +65,7 @@ class Nanobot:
         provider = _make_provider(config)
         bus = MessageBus()
         defaults = config.agents.defaults
-        pf = _make_provider_factory(config) if defaults.fallback_models else None
+        pf = _make_provider_factory(config)
 
         loop = _make_agent_loop(config, bus, provider, defaults, pf)
         return cls(loop)

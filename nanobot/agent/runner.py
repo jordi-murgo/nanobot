@@ -94,16 +94,10 @@ class AgentRunResult:
     had_injections: bool = False
 
 
-ProviderFactory = Any  # Callable[[str], LLMProvider] — avoids circular import
-
-
 class AgentRunner:
     """Run a tool-capable LLM loop without product-layer concerns."""
 
-    def __init__(
-        self,
-        provider: LLMProvider,
-    ):
+    def __init__(self, provider: LLMProvider):
         self.provider = provider
 
     @staticmethod
@@ -595,9 +589,12 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         hook: AgentHook,
         context: AgentHookContext,
-    ) -> LLMResponse:
+    ):
         timeout_s: float | None = spec.llm_timeout_s
         if timeout_s is None:
+            # Default to a finite timeout to avoid per-session lock starvation when an LLM
+            # request hangs indefinitely (e.g. gateway/network stall).
+            # Set NANOBOT_LLM_TIMEOUT_S=0 to disable.
             raw = os.environ.get("NANOBOT_LLM_TIMEOUT_S", "300").strip()
             try:
                 timeout_s = float(raw)
@@ -611,22 +608,11 @@ class AgentRunner:
             messages,
             tools=spec.tools.get_definitions(),
         )
-        return await self._call_provider(self.provider, kwargs, hook, context, spec, timeout_s)
-
-    async def _call_provider(
-        self,
-        provider: LLMProvider,
-        kwargs: dict[str, Any],
-        hook: AgentHook,
-        context: AgentHookContext,
-        spec: AgentRunSpec,
-        timeout_s: float | None = None,
-    ) -> LLMResponse:
         wants_streaming = hook.wants_streaming()
         wants_progress_streaming = (
             not wants_streaming
             and spec.progress_callback is not None
-            and getattr(provider, "supports_progress_deltas", False) is True
+            and getattr(self.provider, "supports_progress_deltas", False) is True
         )
 
         if wants_streaming:
@@ -635,7 +621,7 @@ class AgentRunner:
                     context.streamed_content = True
                 await hook.on_stream(context, delta)
 
-            coro = provider.chat_stream_with_retry(
+            coro = self.provider.chat_stream_with_retry(
                 **kwargs,
                 on_content_delta=_stream,
             )
@@ -654,12 +640,12 @@ class AgentRunner:
                     context.streamed_content = True
                     await spec.progress_callback(incremental)
 
-            coro = provider.chat_stream_with_retry(
+            coro = self.provider.chat_stream_with_retry(
                 **kwargs,
                 on_content_delta=_stream_progress,
             )
         else:
-            coro = provider.chat_with_retry(**kwargs)
+            coro = self.provider.chat_with_retry(**kwargs)
 
         if timeout_s is None:
             return await coro

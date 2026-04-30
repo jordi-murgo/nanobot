@@ -12,6 +12,17 @@ def _make_loop(presets: dict | None = None) -> tuple[AgentLoop, "MyTool"]:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     provider.generation = GenerationSettings(temperature=0.1, max_tokens=8192)
+
+    def _factory(name: str):
+        preset = (presets or {}).get(name)
+        if preset:
+            provider.generation = GenerationSettings(
+                temperature=preset.temperature,
+                max_tokens=preset.max_tokens,
+                reasoning_effort=preset.reasoning_effort,
+            )
+        return provider
+
     loop = AgentLoop(
         bus=MagicMock(),
         provider=provider,
@@ -19,6 +30,7 @@ def _make_loop(presets: dict | None = None) -> tuple[AgentLoop, "MyTool"]:
         model="test-model",
         context_window_tokens=65536,
         model_presets=presets or {},
+        provider_factory=_factory,
         tools_config=ToolsConfig(my=MyToolConfig(allow_set=True)),
     )
     tool = loop.tools.get("my")
