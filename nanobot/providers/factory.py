@@ -82,7 +82,9 @@ def build_provider_for_model(
         from nanobot.providers.azure_openai_provider import AzureOpenAIProvider
 
         provider = AzureOpenAIProvider(
-            api_key=p.api_key, api_base=p.api_base, default_model=model
+            api_key=p.api_key,
+            api_base=p.api_base,
+            default_model=model,
         )
     elif backend == "anthropic":
         from nanobot.providers.anthropic_provider import AnthropicProvider
