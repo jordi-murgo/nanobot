@@ -407,7 +407,7 @@ def _input_text(display_name: str, current: Any, field_type: str, field_info=Non
 
     value = _get_questionary().text(f"{display_name}:", default=default).ask()
 
-    if value is None or value == "":
+    if value is None:
         return None
 
     if field_type == "int":
@@ -511,7 +511,7 @@ def _input_model_with_autocomplete(
         qmark=">",
     ).ask()
 
-    return value if value else None
+    return value if value is not None else None
 
 
 def _input_context_window_with_recommendation(
