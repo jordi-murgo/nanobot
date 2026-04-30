@@ -665,16 +665,21 @@ def _configure_pydantic_model(
             items.append(f"{display}: {formatted}")
         return items + ["[Done]"]
 
+    last_choice: str | None = None
     while True:
         console.clear()
         _show_config_panel(display_name, working_model, fields)
         choices = get_choices()
-        answer = _select_with_back("Select field to configure:", choices)
+        answer = _select_with_back(
+            "Select field to configure:", choices, default=last_choice
+        )
 
         if answer is _BACK_PRESSED or answer is None:
             return None
         if answer == "[Done]":
             return working_model
+
+        last_choice = answer
 
         field_idx = next((i for i, c in enumerate(choices) if c == answer), -1)
         if field_idx < 0 or field_idx >= len(fields):
@@ -793,6 +798,7 @@ def _configure_model_presets(config: Config) -> None:
         choices.append("<- Back")
         return choices
 
+    last_choice: str | None = None
     while True:
         try:
             console.clear()
@@ -801,12 +807,15 @@ def _configure_model_presets(config: Config) -> None:
                 "Create, edit or delete named model presets for quick switching",
             )
             choices = get_preset_choices()
-            answer = _select_with_back("Select preset:", choices)
+            answer = _select_with_back(
+                "Select preset:", choices, default=last_choice
+            )
 
             if answer is _BACK_PRESSED or answer is None or answer == "<- Back":
                 break
 
             assert isinstance(answer, str)
+            last_choice = answer
 
             if answer == "[+] Add new preset":
                 name_input = _get_questionary().text(
@@ -925,18 +934,22 @@ def _configure_providers(config: Config) -> None:
                 choices.append(display)
         return choices + ["<- Back"]
 
+    last_choice: str | None = None
     while True:
         try:
             console.clear()
             _show_section_header("LLM Providers", "Select a provider to configure API key and endpoint")
             choices = get_provider_choices()
-            answer = _select_with_back("Select provider:", choices)
+            answer = _select_with_back(
+                "Select provider:", choices, default=last_choice
+            )
 
             if answer is _BACK_PRESSED or answer is None or answer == "<- Back":
                 break
 
             # Type guard: answer is now guaranteed to be a string
             assert isinstance(answer, str)
+            last_choice = answer
             # Extract provider name from choice (remove " *" suffix if present)
             provider_name = answer.replace(" *", "")
             # Find the actual provider key from display names
@@ -1015,17 +1028,21 @@ def _configure_channels(config: Config) -> None:
     channel_names = list(_get_channel_names().keys())
     choices = channel_names + ["<- Back"]
 
+    last_choice: str | None = None
     while True:
         try:
             console.clear()
             _show_section_header("Chat Channels", "Select a channel to configure connection settings")
-            answer = _select_with_back("Select channel:", choices)
+            answer = _select_with_back(
+                "Select channel:", choices, default=last_choice
+            )
 
             if answer is _BACK_PRESSED or answer is None or answer == "<- Back":
                 break
 
             # Type guard: answer is now guaranteed to be a string
             assert isinstance(answer, str)
+            last_choice = answer
             _configure_channel(config, answer)
         except KeyboardInterrupt:
             console.print("\n[dim]Returning to main menu...[/dim]")
