@@ -34,7 +34,6 @@ from rich.text import Text
 
 from nanobot import __logo__, __version__
 from nanobot.nanobot import _make_agent_loop
-from nanobot.providers.factory import make_provider_factory
 
 
 class SafeFileHistory(FileHistory):
@@ -519,11 +518,10 @@ def serve(
     bus = MessageBus()
     provider = _make_provider(runtime_config)
     defaults = runtime_config.agents.defaults
-    pf = make_provider_factory(runtime_config)
     session_manager = SessionManager(runtime_config.workspace_path)
     _resolved = runtime_config.resolve_preset()
     agent_loop = _make_agent_loop(
-        runtime_config, bus, provider, defaults, pf,
+        runtime_config, bus, provider,
         session_manager=session_manager,
     )
 
@@ -600,8 +598,6 @@ def _run_gateway(
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
-    gw_defaults = config.agents.defaults
-    gw_pf = make_provider_factory(config)
     try:
         provider_snapshot = build_provider_snapshot(config)
     except ValueError as exc:
@@ -619,7 +615,7 @@ def _run_gateway(
 
     # Create agent with cron service
     agent = _make_agent_loop(
-        config, bus, provider, gw_defaults, gw_pf,
+        config, bus, provider,
         cron_service=cron,
         session_manager=session_manager,
         provider_snapshot_loader=load_provider_snapshot,
@@ -977,9 +973,6 @@ def agent(
 
     bus = MessageBus()
     provider = _make_provider(config)
-    chat_defaults = config.agents.defaults
-    chat_pf = make_provider_factory(config)
-
     # Preserve existing single-workspace installs, but keep custom workspaces clean.
     if is_default_workspace(config.workspace_path):
         _migrate_cron_store(config)
@@ -995,7 +988,7 @@ def agent(
 
     _resolved = config.resolve_preset()
     agent_loop = _make_agent_loop(
-        config, bus, provider, chat_defaults, chat_pf,
+        config, bus, provider,
         cron_service=cron,
     )
     restart_notice = consume_restart_notice_from_env()

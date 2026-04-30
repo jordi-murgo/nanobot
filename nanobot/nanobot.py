@@ -64,10 +64,7 @@ class Nanobot:
 
         provider = _make_provider(config)
         bus = MessageBus()
-        defaults = config.agents.defaults
-        pf = _make_provider_factory(config)
-
-        loop = _make_agent_loop(config, bus, provider, defaults, pf)
+        loop = _make_agent_loop(config, bus, provider)
         return cls(loop)
 
     async def run(
@@ -110,13 +107,13 @@ def _make_agent_loop(
     config: Any,
     bus: Any,
     provider: Any,
-    defaults: Any,
-    pf: Any,
     **extra: Any,
 ) -> Any:
     """Create an AgentLoop from config with the common parameter set."""
     from nanobot.agent.loop import AgentLoop
+    from nanobot.providers.factory import make_provider_factory
 
+    defaults = config.agents.defaults
     _resolved = config.resolve_preset()
     return AgentLoop(
         bus=bus,
@@ -129,7 +126,7 @@ def _make_agent_loop(
         max_tool_result_chars=defaults.max_tool_result_chars,
         provider_retry_mode=defaults.provider_retry_mode,
         fallback_models=defaults.fallback_models,
-        provider_factory=pf,
+        provider_factory=make_provider_factory(config),
         web_config=config.tools.web,
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
@@ -146,10 +143,3 @@ def _make_agent_loop(
         model_preset=defaults.model_preset,
         **extra,
     )
-
-
-def _make_provider_factory(config: Any):
-    """Build a cached factory that creates providers for arbitrary model strings."""
-    from nanobot.providers.factory import make_provider_factory
-
-    return make_provider_factory(config)

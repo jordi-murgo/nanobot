@@ -120,17 +120,16 @@ def make_provider_factory(config: Config):
     preset's full config is used.
     """
     cache: dict[str, LLMProvider] = {}
-    presets = getattr(config, "model_presets", {}) or {}
+    presets = config.model_presets
 
     def factory(model_or_preset: str) -> LLMProvider:
         preset = presets.get(model_or_preset)
         actual_model = preset.model if preset else model_or_preset
-        key = model_or_preset
-        if key not in cache:
-            cache[key] = build_provider_for_model(
+        if model_or_preset not in cache:
+            cache[model_or_preset] = build_provider_for_model(
                 config, actual_model, gen_src=preset
             )
-        return cache[key]
+        return cache[model_or_preset]
 
     return factory
 

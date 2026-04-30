@@ -94,6 +94,13 @@ class ModelRouter(LLMProvider):
             error_should_retry=False,
         )
 
+    def _candidates(self):
+        """Yield (label, provider, model) tuples lazily."""
+        yield "primary", self.primary_provider, self.primary_model
+        for fb in self.fallback_models:
+            provider, resolved = self._resolve(fb)
+            yield fb, provider, resolved
+
     async def _route(
         self,
         call: Callable[[LLMProvider, str, Callable[[str], Awaitable[None]] | None], Awaitable[LLMResponse]],
@@ -101,13 +108,10 @@ class ModelRouter(LLMProvider):
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """Try primary then each fallback candidate, lazily resolving providers."""
-        candidates: list[tuple[str, LLMProvider, str]] = [
-            (self.primary_model, self.primary_provider, self.primary_model)
-        ]
+        candidates = self._candidates()
+        label, provider, model = next(candidates)
 
-        index = 0
-        while index < len(candidates):
-            label, provider, model = candidates[index]
+        while True:
             try:
                 response = await self._with_timeout(call(provider, model, on_content_delta))
             except asyncio.CancelledError:
@@ -116,76 +120,39 @@ class ModelRouter(LLMProvider):
                 response = self._resolver_error(label, exc)
 
             if response.finish_reason != "error":
-                if index > 0:
+                if label != "primary":
                     logger.info("LLM failover selected model={}", label)
                 return response
 
             if not self._should_failover(response):
                 return response
 
-            # Lazily append the next fallback candidate only when needed
-            fb_index = index  # index 0 = primary, fallback 0 is at index 1
-            if fb_index < len(self.fallback_models):
-                fb_model = self.fallback_models[fb_index]
-                fb_provider, fb_resolved = self._resolve(fb_model)
-                candidates.append((fb_model, fb_provider, fb_resolved))
-                logger.warning(
-                    "LLM failover model={} next_model={} status={} kind={}",
-                    label,
-                    fb_model,
-                    response.error_status_code,
-                    response.error_kind or response.error_type or response.error_code or "unknown",
-                )
-            else:
+            try:
+                label, provider, model = next(candidates)
+            except StopIteration:
                 logger.warning("LLM failover exhausted after model={}", label)
                 return response
 
-            index += 1
-
-    async def chat_with_retry(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        model: str | None = None,
-        max_tokens: object = LLMProvider._SENTINEL,
-        temperature: object = LLMProvider._SENTINEL,
-        reasoning_effort: object = LLMProvider._SENTINEL,
-        tool_choice: str | dict[str, Any] | None = None,
-        retry_mode: str = "standard",
-        on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
-    ) -> LLMResponse:
-        async def call(
-            provider: LLMProvider,
-            candidate_model: str,
-            _delta: Callable[[str], Awaitable[None]] | None,
-        ) -> LLMResponse:
-            return await provider.chat_with_retry(
-                messages=messages,
-                tools=tools,
-                model=candidate_model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                reasoning_effort=reasoning_effort,
-                tool_choice=tool_choice,
-                retry_mode=retry_mode,
-                on_retry_wait=on_retry_wait,
+            logger.warning(
+                "LLM failover model={} next_model={} status={} kind={}",
+                label,
+                label,
+                response.error_status_code,
+                response.error_kind or response.error_type or response.error_code or "unknown",
             )
 
+    async def chat_with_retry(self, **kwargs: Any) -> LLMResponse:
+        async def call(
+            provider: LLMProvider, candidate_model: str, _delta: Any
+        ) -> LLMResponse:
+            return await provider.chat_with_retry(
+                **{**kwargs, "model": candidate_model}
+            )
         return await self._route(call)
 
-    async def chat_stream_with_retry(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        model: str | None = None,
-        max_tokens: object = LLMProvider._SENTINEL,
-        temperature: object = LLMProvider._SENTINEL,
-        reasoning_effort: object = LLMProvider._SENTINEL,
-        tool_choice: str | dict[str, Any] | None = None,
-        on_content_delta: Callable[[str], Awaitable[None]] | None = None,
-        retry_mode: str = "standard",
-        on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
-    ) -> LLMResponse:
+    async def chat_stream_with_retry(self, **kwargs: Any) -> LLMResponse:
+        on_content_delta = kwargs.pop("on_content_delta", None)
+
         async def call(
             provider: LLMProvider,
             candidate_model: str,
@@ -196,17 +163,9 @@ class ModelRouter(LLMProvider):
             async def buffer_delta(delta: str) -> None:
                 buffered.append(delta)
 
+            kwargs["on_content_delta"] = buffer_delta if external_delta else None
             response = await provider.chat_stream_with_retry(
-                messages=messages,
-                tools=tools,
-                model=candidate_model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                reasoning_effort=reasoning_effort,
-                tool_choice=tool_choice,
-                on_content_delta=buffer_delta if external_delta else None,
-                retry_mode=retry_mode,
-                on_retry_wait=on_retry_wait,
+                **{**kwargs, "model": candidate_model}
             )
             if response.finish_reason != "error" and external_delta:
                 for delta in buffered:

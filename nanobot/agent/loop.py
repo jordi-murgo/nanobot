@@ -222,17 +222,7 @@ class AgentLoop:
         self.channels_config = channels_config
         self.provider_factory = provider_factory
         self.fallback_models = fallback_models or []
-        # Wrap provider with failover router so *all* LLM consumers (runner,
-        # consolidator, dream, subagents) share the same fallback chain.
-        if fallback_models and provider_factory:
-            from nanobot.providers.failover import ModelRouter
-            provider = ModelRouter(
-                primary_provider=provider,
-                primary_model=model or provider.get_default_model(),
-                fallback_models=fallback_models,
-                provider_factory=provider_factory,
-            )
-        self.provider = provider
+        self.provider = self._wrap_with_failover(provider, model or provider.get_default_model())
         self._provider_snapshot_loader = provider_snapshot_loader
         self._provider_signature = provider_signature
         self.workspace = workspace
@@ -316,7 +306,9 @@ class AgentLoop:
             model=self.model,
         )
         self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}
-        self._active_preset: str | None = model_preset if model_preset in self.model_presets else None
+        self._active_preset: str | None = (
+            model_preset if model_preset in self.model_presets else None
+        )
         self._register_default_tools()
         if _tc.my.enable:
             self.tools.register(MyTool(loop=self, modify_allowed=_tc.my.allow_set))
@@ -329,6 +321,19 @@ class AgentLoop:
         """Keep subagent runtime limits aligned with mutable loop settings."""
         self.subagents.max_iterations = self.max_iterations
 
+    def _wrap_with_failover(self, provider: LLMProvider, model: str) -> LLMProvider:
+        """Wrap provider with failover router when fallback_models are configured."""
+        if not self.fallback_models or not self.provider_factory:
+            return provider
+        from nanobot.providers.failover import ModelRouter
+
+        return ModelRouter(
+            primary_provider=provider,
+            primary_model=model,
+            fallback_models=self.fallback_models,
+            provider_factory=self.provider_factory,
+        )
+
     def _apply_provider_snapshot(self, snapshot: ProviderSnapshot) -> None:
         """Swap model/provider for future turns without disturbing an active one."""
         provider = snapshot.provider
@@ -337,14 +342,7 @@ class AgentLoop:
         if self.provider is provider and self.model == model:
             return
         old_model = self.model
-        if self.fallback_models and self.provider_factory:
-            from nanobot.providers.failover import ModelRouter
-            provider = ModelRouter(
-                primary_provider=provider,
-                primary_model=model,
-                fallback_models=self.fallback_models,
-                provider_factory=self.provider_factory,
-            )
+        provider = self._wrap_with_failover(provider, model)
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
@@ -383,19 +381,13 @@ class AgentLoop:
         if not isinstance(name, str) or not name.strip():
             raise ValueError("model_preset must be a non-empty string")
         if name not in self.model_presets:
-            raise KeyError(f"model_preset {name!r} not found. Available: {', '.join(self.model_presets) or '(none)'}")
+            raise KeyError(
+                f"model_preset {name!r} not found. Available: {', '.join(self.model_presets) or '(none)'}"
+            )
         p = self.model_presets[name]
         self.model = p.model
         self.context_window_tokens = p.context_window_tokens
-        new_provider = self.provider_factory(name)
-        if self.fallback_models:
-            from nanobot.providers.failover import ModelRouter
-            new_provider = ModelRouter(
-                primary_provider=new_provider,
-                primary_model=p.model,
-                fallback_models=self.fallback_models,
-                provider_factory=self.provider_factory,
-            )
+        new_provider = self._wrap_with_failover(self.provider_factory(name), p.model)
         if new_provider is not self.provider:
             self.provider = new_provider
             self.runner.provider = new_provider
@@ -447,7 +439,9 @@ class AgentLoop:
                     user_agent=self.web_config.user_agent,
                 )
             )
-        self.tools.register(MessageTool(send_callback=self.bus.publish_outbound, workspace=self.workspace))
+        self.tools.register(
+            MessageTool(send_callback=self.bus.publish_outbound, workspace=self.workspace)
+        )
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(
@@ -477,8 +471,11 @@ class AgentLoop:
             self._mcp_connecting = False
 
     def _set_tool_context(
-        self, channel: str, chat_id: str,
-        message_id: str | None = None, metadata: dict | None = None,
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        metadata: dict | None = None,
         session_key: str | None = None,
     ) -> None:
         """Update context for all tools that need routing info."""
@@ -498,7 +495,9 @@ class AgentLoop:
                     if name == "spawn":
                         tool.set_context(channel, chat_id, effective_key=effective_key)
                     elif name == "cron":
-                        tool.set_context(channel, chat_id, metadata=metadata, session_key=session_key)
+                        tool.set_context(
+                            channel, chat_id, metadata=metadata, session_key=session_key
+                        )
                     elif name == "message":
                         tool.set_context(channel, chat_id, message_id, metadata=metadata)
                     else:
@@ -660,9 +659,11 @@ class AgentLoop:
             # Block if nothing drained but sub-agents spawned in this dispatch
             # are still running.  Keeps the runner loop alive so subsequent
             # completions are injected in-order rather than dispatched separately.
-            if (not items
-                    and session is not None
-                    and self.subagents.get_running_count_by_session(session.key) > 0):
+            if (
+                not items
+                and session is not None
+                and self.subagents.get_running_count_by_session(session.key) > 0
+            ):
                 try:
                     msg = await asyncio.wait_for(pending_queue.get(), timeout=300)
                 except asyncio.TimeoutError:
@@ -680,25 +681,27 @@ class AgentLoop:
 
             return items
 
-        result = await self.runner.run(AgentRunSpec(
-            initial_messages=initial_messages,
-            tools=self.tools,
-            model=self.model,
-            max_iterations=self.max_iterations,
-            max_tool_result_chars=self.max_tool_result_chars,
-            hook=hook,
-            error_message="Sorry, I encountered an error calling the AI model.",
-            concurrent_tools=True,
-            workspace=self.workspace,
-            session_key=session.key if session else None,
-            context_window_tokens=self.context_window_tokens,
-            context_block_limit=self.context_block_limit,
-            provider_retry_mode=self.provider_retry_mode,
-            progress_callback=on_progress,
-            retry_wait_callback=on_retry_wait,
-            checkpoint_callback=_checkpoint,
-            injection_callback=_drain_pending,
-        ))
+        result = await self.runner.run(
+            AgentRunSpec(
+                initial_messages=initial_messages,
+                tools=self.tools,
+                model=self.model,
+                max_iterations=self.max_iterations,
+                max_tool_result_chars=self.max_tool_result_chars,
+                hook=hook,
+                error_message="Sorry, I encountered an error calling the AI model.",
+                concurrent_tools=True,
+                workspace=self.workspace,
+                session_key=session.key if session else None,
+                context_window_tokens=self.context_window_tokens,
+                context_block_limit=self.context_block_limit,
+                provider_retry_mode=self.provider_retry_mode,
+                progress_callback=on_progress,
+                retry_wait_callback=on_retry_wait,
+                checkpoint_callback=_checkpoint,
+                injection_callback=_drain_pending,
+            )
+        )
         self._last_usage = result.usage
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
@@ -709,7 +712,13 @@ class AgentLoop:
                 await on_stream_end(resuming=False)
         elif result.stop_reason == "error":
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
-        return result.final_content, result.tools_used, result.messages, result.stop_reason, result.had_injections
+        return (
+            result.final_content,
+            result.tools_used,
+            result.messages,
+            result.stop_reason,
+            result.had_injections,
+        )
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -739,7 +748,9 @@ class AgentLoop:
             raw = msg.content.strip()
             if self.commands.is_priority(raw):
                 await self._dispatch_command_inline(
-                    msg, msg.session_key, raw,
+                    msg,
+                    msg.session_key,
+                    raw,
                     self.commands.dispatch_priority,
                 )
                 continue
@@ -752,7 +763,9 @@ class AgentLoop:
                 # dispatch them directly (same pattern as priority commands).
                 if self.commands.is_dispatchable_command(raw):
                     await self._dispatch_command_inline(
-                        msg, effective_key, raw,
+                        msg,
+                        effective_key,
+                        raw,
                         self.commands.dispatch,
                     )
                     continue
@@ -815,11 +828,14 @@ class AgentLoop:
                             meta = dict(msg.metadata or {})
                             meta["_stream_delta"] = True
                             meta["_stream_id"] = _current_stream_id()
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content=delta,
-                                metadata=meta,
-                            ))
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    channel=msg.channel,
+                                    chat_id=msg.chat_id,
+                                    content=delta,
+                                    metadata=meta,
+                                )
+                            )
 
                         async def on_stream_end(*, resuming: bool = False) -> None:
                             nonlocal stream_segment
@@ -827,24 +843,33 @@ class AgentLoop:
                             meta["_stream_end"] = True
                             meta["_resuming"] = resuming
                             meta["_stream_id"] = _current_stream_id()
-                            await self.bus.publish_outbound(OutboundMessage(
-                                channel=msg.channel, chat_id=msg.chat_id,
-                                content="",
-                                metadata=meta,
-                            ))
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    channel=msg.channel,
+                                    chat_id=msg.chat_id,
+                                    content="",
+                                    metadata=meta,
+                                )
+                            )
                             stream_segment += 1
 
                     response = await self._process_message(
-                        msg, on_stream=on_stream, on_stream_end=on_stream_end,
+                        msg,
+                        on_stream=on_stream,
+                        on_stream_end=on_stream_end,
                         pending_queue=pending,
                     )
                     if response is not None:
                         await self.bus.publish_outbound(response)
                     elif msg.channel == "cli":
-                        await self.bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel, chat_id=msg.chat_id,
-                            content="", metadata=msg.metadata or {},
-                        ))
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content="",
+                                metadata=msg.metadata or {},
+                            )
+                        )
                 except asyncio.CancelledError:
                     logger.info("Task cancelled for session {}", session_key)
                     # Preserve partial context from the interrupted turn so
@@ -873,10 +898,13 @@ class AgentLoop:
                     raise
                 except Exception:
                     logger.exception("Error processing message for session {}", session_key)
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel, chat_id=msg.chat_id,
-                        content="Sorry, I encountered an error.",
-                    ))
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content="Sorry, I encountered an error.",
+                        )
+                    )
         finally:
             # Drain any messages still in the pending queue and re-publish
             # them to the bus so they are processed as fresh inbound messages
@@ -894,7 +922,8 @@ class AgentLoop:
                 if leftover:
                     logger.info(
                         "Re-published {} leftover message(s) to bus for session {}",
-                        leftover, session_key,
+                        leftover,
+                        session_key,
                     )
 
     async def close_mcp(self) -> None:
@@ -962,8 +991,11 @@ class AgentLoop:
             if is_subagent and self._persist_subagent_followup(session, msg):
                 self.sessions.save(session)
             self._set_tool_context(
-                channel, chat_id, msg.metadata.get("message_id"),
-                msg.metadata, session_key=key,
+                channel,
+                chat_id,
+                msg.metadata.get("message_id"),
+                msg.metadata,
+                session_key=key,
             )
             _hist_kwargs: dict[str, Any] = {
                 "max_messages": self._max_messages,
@@ -984,7 +1016,10 @@ class AgentLoop:
                 current_role=current_role,
             )
             final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
-                messages, session=session, channel=channel, chat_id=chat_id,
+                messages,
+                session=session,
+                channel=channel,
+                chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
                 metadata=msg.metadata,
                 session_key=key,
@@ -1047,8 +1082,11 @@ class AgentLoop:
         )
 
         self._set_tool_context(
-            msg.channel, msg.chat_id, msg.metadata.get("message_id"),
-            msg.metadata, session_key=key,
+            msg.channel,
+            msg.chat_id,
+            msg.metadata.get("message_id"),
+            msg.metadata,
+            session_key=key,
         )
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
@@ -1240,20 +1278,22 @@ class AgentLoop:
                         continue
                     entry["content"] = filtered
             elif role == "user":
-                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
+                if isinstance(content, str) and content.startswith(
+                    ContextBuilder._RUNTIME_CONTEXT_TAG
+                ):
                     # Strip the entire runtime-context block (including any session summary).
                     # The block is bounded by _RUNTIME_CONTEXT_TAG and _RUNTIME_CONTEXT_END.
                     end_marker = ContextBuilder._RUNTIME_CONTEXT_END
                     end_pos = content.find(end_marker)
                     if end_pos >= 0:
-                        after = content[end_pos + len(end_marker):].lstrip("\n")
+                        after = content[end_pos + len(end_marker) :].lstrip("\n")
                         if after:
                             entry["content"] = after
                         else:
                             continue
                     else:
                         # Fallback: no end marker found, strip the tag prefix
-                        after_tag = content[len(ContextBuilder._RUNTIME_CONTEXT_TAG):].lstrip("\n")
+                        after_tag = content[len(ContextBuilder._RUNTIME_CONTEXT_TAG) :].lstrip("\n")
                         if after_tag.strip():
                             entry["content"] = after_tag
                         else:
@@ -1406,8 +1446,11 @@ class AgentLoop:
         """Process a message directly and return the outbound payload."""
         await self._connect_mcp()
         msg = InboundMessage(
-            channel=channel, sender_id="user", chat_id=chat_id,
-            content=content, media=media or [],
+            channel=channel,
+            sender_id="user",
+            chat_id=chat_id,
+            content=content,
+            media=media or [],
         )
         return await self._process_message(
             msg,
