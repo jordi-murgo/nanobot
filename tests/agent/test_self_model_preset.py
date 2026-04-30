@@ -1,6 +1,6 @@
 # tests/agent/test_self_model_preset.py
-import asyncio
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 from nanobot.agent.loop import AgentLoop
@@ -8,7 +8,7 @@ from nanobot.config.schema import ModelPresetConfig, MyToolConfig, ToolsConfig
 from nanobot.providers.base import GenerationSettings
 
 
-def _make_loop(presets: dict | None = None) -> tuple[AgentLoop, "MyTool"]:
+def _make_loop(presets: dict | None = None) -> tuple[AgentLoop, Any]:
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     provider.generation = GenerationSettings(temperature=0.1, max_tokens=8192)
@@ -48,7 +48,7 @@ async def test_set_model_preset_updates_all_fields() -> None:
         ),
     }
     loop, tool = _make_loop(presets)
-    result = await tool.execute(action="set", key="model_preset", value="gpt5")
+    await tool.execute(action="set", key="model_preset", value="gpt5")
 
     assert loop.model == "gpt-5"
     assert loop.context_window_tokens == 128000

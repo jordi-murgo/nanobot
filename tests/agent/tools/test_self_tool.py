@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import BaseModel
 
 from nanobot.agent.tools.self import MyTool
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -231,13 +230,13 @@ class TestModifyRestricted:
     @pytest.mark.asyncio
     async def test_modify_string_int_coerced(self):
         tool = _make_tool()
-        result = await tool.execute(action="set", key="max_iterations", value="80")
+        await tool.execute(action="set", key="max_iterations", value="80")
         assert tool._loop.max_iterations == 80
 
     @pytest.mark.asyncio
     async def test_modify_context_window_valid(self):
         tool = _make_tool()
-        result = await tool.execute(action="set", key="context_window_tokens", value=131072)
+        await tool.execute(action="set", key="context_window_tokens", value=131072)
         assert tool._loop.context_window_tokens == 131072
 
     @pytest.mark.asyncio
@@ -337,13 +336,13 @@ class TestModifyFree:
     @pytest.mark.asyncio
     async def test_modify_allows_list(self):
         tool = _make_tool()
-        result = await tool.execute(action="set", key="items", value=[1, 2, 3])
+        await tool.execute(action="set", key="items", value=[1, 2, 3])
         assert tool._loop._runtime_vars["items"] == [1, 2, 3]
 
     @pytest.mark.asyncio
     async def test_modify_allows_dict(self):
         tool = _make_tool()
-        result = await tool.execute(action="set", key="data", value={"a": 1})
+        await tool.execute(action="set", key="data", value={"a": 1})
         assert tool._loop._runtime_vars["data"] == {"a": 1}
 
     @pytest.mark.asyncio
@@ -689,8 +688,8 @@ class TestSubagentHookStatus:
     @pytest.mark.asyncio
     async def test_after_iteration_updates_status(self):
         """after_iteration should copy iteration, tool_events, usage to status."""
-        from nanobot.agent.subagent import SubagentStatus, _SubagentHook
         from nanobot.agent.hook import AgentHookContext
+        from nanobot.agent.subagent import SubagentStatus, _SubagentHook
 
         status = SubagentStatus(
             task_id="test",
@@ -716,8 +715,8 @@ class TestSubagentHookStatus:
     @pytest.mark.asyncio
     async def test_after_iteration_with_error(self):
         """after_iteration should set status.error when context has an error."""
-        from nanobot.agent.subagent import SubagentStatus, _SubagentHook
         from nanobot.agent.hook import AgentHookContext
+        from nanobot.agent.subagent import SubagentStatus, _SubagentHook
 
         status = SubagentStatus(
             task_id="test",
@@ -739,8 +738,8 @@ class TestSubagentHookStatus:
     @pytest.mark.asyncio
     async def test_after_iteration_no_status_is_noop(self):
         """after_iteration with no status should be a no-op."""
-        from nanobot.agent.subagent import _SubagentHook
         from nanobot.agent.hook import AgentHookContext
+        from nanobot.agent.subagent import _SubagentHook
 
         hook = _SubagentHook("test")
         context = AgentHookContext(iteration=1, messages=[])
@@ -756,8 +755,8 @@ class TestCheckpointCallback:
     @pytest.mark.asyncio
     async def test_checkpoint_updates_phase_and_iteration(self):
         """The _on_checkpoint callback should update status.phase and iteration."""
+
         from nanobot.agent.subagent import SubagentStatus
-        import asyncio
 
         status = SubagentStatus(
             task_id="cp",
