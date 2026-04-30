@@ -407,7 +407,7 @@ def _input_text(display_name: str, current: Any, field_type: str, field_info=Non
 
     value = _get_questionary().text(f"{display_name}:", default=default).ask()
 
-    if value is None or value == "":
+    if value is None:
         return None
 
     if field_type == "int":
@@ -697,6 +697,15 @@ _FIELD_HANDLERS: dict[str, Any] = {
 }
 
 
+def _is_str_or_none(annotation: Any) -> bool:
+    """Check whether a field annotation is ``str | None`` (or ``Optional[str]``)."""
+    origin = get_origin(annotation)
+    if origin is None:
+        return False
+    args = get_args(annotation)
+    return str in args and type(None) in args
+
+
 def _configure_pydantic_model(
     model: BaseModel,
     display_name: str,
@@ -811,6 +820,10 @@ def _configure_pydantic_model(
         else:
             new_value = _input_with_existing(field_display, current_value, ftype.type_name, field_info=field_info)
         if new_value is not None:
+            # Normalize empty string to None for optional string fields so that
+            # clearing an api_key / api_base actually removes the value.
+            if new_value == "" and _is_str_or_none(field_info.annotation):
+                new_value = None
             setattr(working_model, field_name, new_value)
 
 
