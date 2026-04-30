@@ -43,9 +43,22 @@ def build_provider_for_model(
             reasoning_effort=getattr(gen_src, "reasoning_effort", None),
         )
 
-    provider_name = config.get_provider_name(model)
-    p = config.get_provider(model)
-    spec = find_by_name(provider_name) if provider_name else None
+    # When a preset explicitly specifies a provider, use it directly instead of
+    # inferring from config.defaults (which may point to a different active preset).
+    if isinstance(gen_src, ModelPresetConfig) and gen_src.provider != "auto":
+        provider_name = gen_src.provider
+        p = getattr(config.providers, provider_name, None)
+        spec = find_by_name(provider_name)
+        api_base = (
+            p.api_base
+            if p and p.api_base
+            else (spec.default_api_base if spec and spec.default_api_base else None)
+        )
+    else:
+        provider_name = config.get_provider_name(model)
+        p = config.get_provider(model)
+        spec = find_by_name(provider_name) if provider_name else None
+        api_base = config.get_api_base(model)
     backend = spec.backend if spec else "openai_compat"
 
     if backend == "azure_openai":
@@ -76,7 +89,7 @@ def build_provider_for_model(
 
         provider = AnthropicProvider(
             api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
+            api_base=api_base,
             default_model=model,
             extra_headers=p.extra_headers if p else None,
         )
@@ -85,7 +98,7 @@ def build_provider_for_model(
 
         provider = OpenAICompatProvider(
             api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
+            api_base=api_base,
             default_model=model,
             extra_headers=p.extra_headers if p else None,
             spec=spec,
@@ -118,7 +131,7 @@ def make_provider_factory(config: Config):
     def factory(model_or_preset: str) -> LLMProvider:
         preset = presets.get(model_or_preset)
         actual_model = preset.model if preset else model_or_preset
-        key = actual_model
+        key = model_or_preset
         if key not in cache:
             cache[key] = build_provider_for_model(
                 config, actual_model, gen_src=preset
@@ -130,18 +143,17 @@ def make_provider_factory(config: Config):
 
 def provider_signature(config: Config) -> tuple[object, ...]:
     """Return the config fields that affect the primary LLM provider."""
-    model = config.agents.defaults.model
-    defaults = config.agents.defaults
+    resolved = config.resolve_preset()
     return (
-        model,
-        defaults.provider,
-        config.get_provider_name(model),
-        config.get_api_key(model),
-        config.get_api_base(model),
-        defaults.max_tokens,
-        defaults.temperature,
-        defaults.reasoning_effort,
-        defaults.context_window_tokens,
+        resolved.model,
+        resolved.provider,
+        config.get_provider_name(resolved.model),
+        config.get_api_key(resolved.model),
+        config.get_api_base(resolved.model),
+        resolved.max_tokens,
+        resolved.temperature,
+        resolved.reasoning_effort,
+        resolved.context_window_tokens,
     )
 
 

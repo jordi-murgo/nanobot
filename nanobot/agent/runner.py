@@ -15,7 +15,6 @@ from nanobot.agent.hook import AgentHook, AgentHookContext
 from nanobot.agent.tools.ask import AskUserInterrupt
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from nanobot.providers.failover import ModelRouter
 from nanobot.utils.helpers import (
     build_assistant_message,
     estimate_message_tokens,
@@ -74,7 +73,6 @@ class AgentRunSpec:
     context_window_tokens: int | None = None
     context_block_limit: int | None = None
     provider_retry_mode: str = "standard"
-    fallback_models: list[str] = field(default_factory=list)
     progress_callback: Any | None = None
     retry_wait_callback: Any | None = None
     checkpoint_callback: Any | None = None
@@ -105,21 +103,8 @@ class AgentRunner:
     def __init__(
         self,
         provider: LLMProvider,
-        *,
-        provider_factory: ProviderFactory | None = None,
-        fallback_models: list[str] | None = None,
     ):
         self.provider = provider
-        self._provider_factory = provider_factory
-        self._model_router: ModelRouter | None = None
-        if fallback_models:
-            self._model_router = ModelRouter(
-                primary_provider=provider,
-                primary_model=provider.get_default_model(),
-                fallback_models=fallback_models,
-                provider_factory=provider_factory,
-                per_candidate_timeout_s=None,
-            )
 
     @staticmethod
     def _merge_message_content(left: Any, right: Any) -> str | list[dict[str, Any]]:
@@ -626,31 +611,7 @@ class AgentRunner:
             messages,
             tools=spec.tools.get_definitions(),
         )
-        provider: LLMProvider = self.provider
-        request_timeout = timeout_s
-        if spec.fallback_models:
-            if self._model_router is not None:
-                self._model_router.per_candidate_timeout_s = timeout_s
-                provider = self._model_router
-            else:
-                provider = self._build_model_router(spec, timeout_s)
-            # ModelRouter applies the same timeout per candidate, preserving
-            # fallback on primary timeouts instead of timing out the whole chain.
-            request_timeout = None
-        return await self._call_provider(provider, kwargs, hook, context, spec, request_timeout)
-
-    def _build_model_router(
-        self,
-        spec: AgentRunSpec,
-        timeout_s: float | None,
-    ) -> ModelRouter:
-        return ModelRouter(
-            primary_provider=self.provider,
-            primary_model=spec.model,
-            fallback_models=spec.fallback_models,
-            provider_factory=self._provider_factory,
-            per_candidate_timeout_s=timeout_s,
-        )
+        return await self._call_provider(self.provider, kwargs, hook, context, spec, timeout_s)
 
     async def _call_provider(
         self,

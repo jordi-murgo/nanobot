@@ -96,7 +96,9 @@ class AgentDefaults(Base):
     max_tool_iterations: int = 200
     max_tool_result_chars: int = 16_000
     provider_retry_mode: Literal["standard", "persistent"] = "standard"
-    fallback_models: list[str] = Field(default_factory=list)
+    fallback_models: list[str] = Field(
+        default_factory=list
+    )  # Ordered fallback chain. Each item can be a model name (e.g. "gpt-4o") or a preset name defined in model_presets.
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
     disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])

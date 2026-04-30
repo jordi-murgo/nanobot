@@ -625,11 +625,75 @@ def _handle_provider_field(
         setattr(working_model, field_name, new_value)
 
 
+def _handle_fallback_models_field(
+    working_model: BaseModel, field_name: str, field_display: str, current_value: Any
+) -> None:
+    """Handle the 'fallback_models' field with preset-aware multi-select."""
+    items: list[str] = list(current_value) if isinstance(current_value, list) else []
+    preset_names = sorted(_MODEL_PRESET_CACHE)
+
+    while True:
+        console.clear()
+        console.print(f"[bold]{field_display}[/bold]")
+        if items:
+            for idx, item in enumerate(items, 1):
+                tag = "[preset]" if item in _MODEL_PRESET_CACHE else "[model]"
+                console.print(f"  {idx}. {tag} {item}")
+        else:
+            console.print("  [dim](empty)[/dim]")
+        console.print()
+
+        choices = ["[+] Add preset", "[+] Add custom model"]
+        if items:
+            choices.append("[-] Remove last")
+            choices.append("[X] Clear all")
+        choices.append("[Done]")
+        choices.append("<- Back")
+
+        answer = _get_questionary().select(
+            "Manage fallback chain:",
+            choices=choices,
+            qmark=">",
+        ).ask()
+
+        if answer is None or answer == "<- Back":
+            return
+        if answer == "[Done]":
+            setattr(working_model, field_name, items)
+            return
+        if answer == "[+] Add preset":
+            if not preset_names:
+                console.print("[yellow]! No presets defined yet.[/yellow]")
+                _get_questionary().press_any_key_to_continue().ask()
+                continue
+            add_choices = [p for p in preset_names if p not in items]
+            if not add_choices:
+                console.print("[yellow]! All presets already added.[/yellow]")
+                _get_questionary().press_any_key_to_continue().ask()
+                continue
+            picked = _select_with_back("Select preset:", add_choices)
+            if picked is _BACK_PRESSED or picked is None:
+                continue
+            items.append(picked)
+        elif answer == "[+] Add custom model":
+            provider = _get_current_provider(working_model)
+            value = _input_model_with_autocomplete(
+                "Model name", None, provider
+            )
+            if value and value not in items:
+                items.append(value)
+        elif answer == "[-] Remove last" and items:
+            items.pop()
+        elif answer == "[X] Clear all" and items:
+            items.clear()
+
+
 _FIELD_HANDLERS: dict[str, Any] = {
     "model": _handle_model_field,
     "context_window_tokens": _handle_context_window_field,
     "model_preset": _handle_model_preset_field,
     "provider": _handle_provider_field,
+    "fallback_models": _handle_fallback_models_field,
 }
 
 
@@ -1250,6 +1314,7 @@ def run_onboard(initial_config: Config | None = None) -> OnboardResult:
     config = base_config.model_copy(deep=True)
     _sync_preset_cache(config)
 
+    last_main_choice: str | None = None
     while True:
         console.clear()
         _show_main_menu_header()
@@ -1270,6 +1335,7 @@ def run_onboard(initial_config: Config | None = None) -> OnboardResult:
                     "[S] Save and Exit",
                     "[X] Exit Without Saving",
                 ],
+                default=last_main_choice,
                 qmark=">",
             ).ask()
         except KeyboardInterrupt:
@@ -1302,4 +1368,5 @@ def run_onboard(initial_config: Config | None = None) -> OnboardResult:
 
         action_fn = _MENU_DISPATCH.get(answer)
         if action_fn:
+            last_main_choice = answer
             action_fn()

@@ -1194,3 +1194,140 @@ class TestModelPresetWizard:
         preset = ModelPresetConfig(model="x", provider="auto")
         _handle_provider_field(preset, "provider", "Provider", "auto")
         assert preset.provider == "auto"
+
+    def test_fallback_models_add_preset_and_done(self, monkeypatch):
+        """_handle_fallback_models_field should add a preset and save on Done."""
+        from nanobot.cli.onboard import _handle_fallback_models_field, _MODEL_PRESET_CACHE
+        from nanobot.config.schema import AgentDefaults
+
+        _MODEL_PRESET_CACHE.clear()
+        _MODEL_PRESET_CACHE.update({"fast", "power"})
+
+        responses = iter(["[+] Add preset", "[Done]"])
+
+        class FakePrompt:
+            def __init__(self, response):
+                self.response = response
+            def ask(self):
+                if isinstance(self.response, BaseException):
+                    raise self.response
+                return self.response
+
+        def fake_select(*_args, **_kwargs):
+            return FakePrompt(next(responses))
+
+        monkeypatch.setattr(onboard_wizard, "_select_with_back", lambda *a, **kw: "fast")
+        monkeypatch.setattr(onboard_wizard, "questionary", SimpleNamespace(select=fake_select))
+        monkeypatch.setattr(onboard_wizard, "console", SimpleNamespace(clear=lambda: None, print=lambda *a, **kw: None))
+
+        defaults = AgentDefaults()
+        _handle_fallback_models_field(defaults, "fallback_models", "Fallback Models", [])
+        assert defaults.fallback_models == ["fast"]
+
+    def test_fallback_models_back_preserves_existing(self, monkeypatch):
+        """_handle_fallback_models_field should not modify value on Back."""
+        from nanobot.cli.onboard import _handle_fallback_models_field, _MODEL_PRESET_CACHE
+        from nanobot.config.schema import AgentDefaults
+
+        _MODEL_PRESET_CACHE.clear()
+        _MODEL_PRESET_CACHE.add("fast")
+
+        class FakePrompt:
+            def __init__(self, response):
+                self.response = response
+            def ask(self):
+                if isinstance(self.response, BaseException):
+                    raise self.response
+                return self.response
+
+        def fake_select(*_args, **_kwargs):
+            return FakePrompt("<- Back")
+
+        monkeypatch.setattr(onboard_wizard, "questionary", SimpleNamespace(select=fake_select))
+        monkeypatch.setattr(onboard_wizard, "console", SimpleNamespace(clear=lambda: None, print=lambda *a, **kw: None))
+
+        defaults = AgentDefaults(fallback_models=["existing"])
+        _handle_fallback_models_field(defaults, "fallback_models", "Fallback Models", ["existing"])
+        assert defaults.fallback_models == ["existing"]
+
+    def test_fallback_models_remove_last(self, monkeypatch):
+        """_handle_fallback_models_field should remove last item."""
+        from nanobot.cli.onboard import _handle_fallback_models_field, _MODEL_PRESET_CACHE
+        from nanobot.config.schema import AgentDefaults
+
+        _MODEL_PRESET_CACHE.clear()
+
+        responses = iter(["[-] Remove last", "[Done]"])
+
+        class FakePrompt:
+            def __init__(self, response):
+                self.response = response
+            def ask(self):
+                if isinstance(self.response, BaseException):
+                    raise self.response
+                return self.response
+
+        def fake_select(*_args, **_kwargs):
+            return FakePrompt(next(responses))
+
+        monkeypatch.setattr(onboard_wizard, "questionary", SimpleNamespace(select=fake_select))
+        monkeypatch.setattr(onboard_wizard, "console", SimpleNamespace(clear=lambda: None, print=lambda *a, **kw: None))
+
+        defaults = AgentDefaults(fallback_models=["a", "b"])
+        _handle_fallback_models_field(defaults, "fallback_models", "Fallback Models", ["a", "b"])
+        assert defaults.fallback_models == ["a"]
+
+    def test_fallback_models_add_custom_model(self, monkeypatch):
+        """_handle_fallback_models_field should add a custom model name."""
+        from nanobot.cli.onboard import _handle_fallback_models_field, _MODEL_PRESET_CACHE
+        from nanobot.config.schema import AgentDefaults
+
+        _MODEL_PRESET_CACHE.clear()
+
+        responses = iter(["[+] Add custom model", "[Done]"])
+
+        class FakePrompt:
+            def __init__(self, response):
+                self.response = response
+            def ask(self):
+                if isinstance(self.response, BaseException):
+                    raise self.response
+                return self.response
+
+        def fake_select(*_args, **_kwargs):
+            return FakePrompt(next(responses))
+
+        monkeypatch.setattr(onboard_wizard, "_input_model_with_autocomplete", lambda *a, **kw: "gpt-4o")
+        monkeypatch.setattr(onboard_wizard, "questionary", SimpleNamespace(select=fake_select))
+        monkeypatch.setattr(onboard_wizard, "console", SimpleNamespace(clear=lambda: None, print=lambda *a, **kw: None))
+
+        defaults = AgentDefaults()
+        _handle_fallback_models_field(defaults, "fallback_models", "Fallback Models", [])
+        assert defaults.fallback_models == ["gpt-4o"]
+
+    def test_fallback_models_no_presets_shows_warning(self, monkeypatch):
+        """_handle_fallback_models_field should warn when no presets exist."""
+        from nanobot.cli.onboard import _handle_fallback_models_field, _MODEL_PRESET_CACHE
+        from nanobot.config.schema import AgentDefaults
+
+        _MODEL_PRESET_CACHE.clear()
+
+        responses = iter(["[+] Add preset", "[Done]"])
+
+        class FakePrompt:
+            def __init__(self, response):
+                self.response = response
+            def ask(self):
+                if isinstance(self.response, BaseException):
+                    raise self.response
+                return self.response
+
+        def fake_select(*_args, **_kwargs):
+            return FakePrompt(next(responses))
+
+        monkeypatch.setattr(onboard_wizard, "questionary", SimpleNamespace(select=fake_select, press_any_key_to_continue=lambda: FakePrompt(None)))
+        monkeypatch.setattr(onboard_wizard, "console", SimpleNamespace(clear=lambda: None, print=lambda *a, **kw: None))
+
+        defaults = AgentDefaults()
+        _handle_fallback_models_field(defaults, "fallback_models", "Fallback Models", [])
+        assert defaults.fallback_models == []

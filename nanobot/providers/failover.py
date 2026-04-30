@@ -41,14 +41,20 @@ class ModelRouter(LLMProvider):
         return self.primary_model
 
     async def chat(self, **kwargs: Any) -> LLMResponse:
-        return await self.primary_provider.chat(**kwargs)
+        async def call(provider: LLMProvider, candidate_model: str, _delta: Any) -> LLMResponse:
+            return await provider.chat(**{**kwargs, "model": candidate_model})
+        return await self._route(call)
 
     async def chat_stream(self, **kwargs: Any) -> LLMResponse:
-        return await self.primary_provider.chat_stream(**kwargs)
+        async def call(provider: LLMProvider, candidate_model: str, external_delta: Any) -> LLMResponse:
+            return await provider.chat_stream(
+                **{**kwargs, "model": candidate_model, "on_content_delta": external_delta}
+            )
+        return await self._route(call, on_content_delta=kwargs.get("on_content_delta"))
 
     @classmethod
     def _should_failover(cls, response: LLMResponse) -> bool:
-        return response.finish_reason == "error" and cls._is_transient_response(response)
+        return response.finish_reason == "error"
 
     def _resolve(self, model: str) -> tuple[LLMProvider, str]:
         """Return (provider, actual_model_name) for a model string.
@@ -95,7 +101,6 @@ class ModelRouter(LLMProvider):
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """Try primary then each fallback candidate, lazily resolving providers."""
-        last_response: LLMResponse | None = None
         candidates: list[tuple[str, LLMProvider, str]] = [
             (self.primary_model, self.primary_provider, self.primary_model)
         ]
@@ -115,12 +120,11 @@ class ModelRouter(LLMProvider):
                     logger.info("LLM failover selected model={}", label)
                 return response
 
-            last_response = response
             if not self._should_failover(response):
                 return response
 
             # Lazily append the next fallback candidate only when needed
-            fb_index = index  # 0 is primary, so fb-1 is at index 1
+            fb_index = index  # index 0 = primary, fallback 0 is at index 1
             if fb_index < len(self.fallback_models):
                 fb_model = self.fallback_models[fb_index]
                 fb_provider, fb_resolved = self._resolve(fb_model)
@@ -137,13 +141,6 @@ class ModelRouter(LLMProvider):
                 return response
 
             index += 1
-
-        return last_response or LLMResponse(
-            content="No available fallback model candidate.",
-            finish_reason="error",
-            error_kind="configuration",
-            error_should_retry=False,
-        )
 
     async def chat_with_retry(
         self,

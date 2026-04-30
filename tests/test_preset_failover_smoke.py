@@ -210,8 +210,9 @@ async def test_preset_model_with_fallback_models_in_config(tmp_path: Path) -> No
 
     loop = bot._loop
     assert loop.model == "gpt-4.1"
-    assert loop.runner._model_router is not None
-    assert loop.runner._model_router.fallback_models == ["fallback-model"]
+    from nanobot.providers.failover import ModelRouter
+    assert isinstance(loop.provider, ModelRouter)
+    assert loop.provider.fallback_models == ["fallback-model"]
 
 
 # ---------------------------------------------------------------------------
@@ -339,8 +340,8 @@ async def test_failover_sends_second_request_to_fallback_model() -> None:
 
 @pytest.mark.skipif(not HAS_AIOHTTP, reason="aiohttp not installed")
 @pytest.mark.asyncio
-async def test_failover_skips_on_quota_429() -> None:
-    """Quota 429 is non-transient; ModelRouter must not failover."""
+async def test_failover_on_quota_429() -> None:
+    """Quota 429 on one provider may still work on a different provider."""
     requests_log: list[dict] = []
 
     async def handler(request: web.Request) -> web.Response:
@@ -387,19 +388,19 @@ async def test_failover_skips_on_quota_429() -> None:
                 messages=[{"role": "user", "content": "hi"}],
             )
 
-        # Quota 429 should NOT trigger failover.
-        factory.assert_not_called()
+        # Quota 429 SHOULD trigger failover — another provider may still work.
+        factory.assert_called_once_with("fallback-model")
         assert response.finish_reason == "error"
-        # Only primary model should have been requested.
-        assert all(r["model"] == "primary-model" for r in requests_log)
+        # Both primary and fallback should have been requested.
+        assert len(requests_log) == 2
     finally:
         await server.close()
 
 
 @pytest.mark.skipif(not HAS_AIOHTTP, reason="aiohttp not installed")
 @pytest.mark.asyncio
-async def test_agent_runner_failover_integration() -> None:
-    """Full AgentRunner -> ModelRouter -> real HTTP failover chain."""
+async def test_model_router_failover_integration() -> None:
+    """ModelRouter -> real HTTP failover chain (primary 503, fallback 200)."""
     requests_log: list[dict] = []
 
     async def handler(request: web.Request) -> web.Response:
@@ -420,7 +421,7 @@ async def test_agent_runner_failover_integration() -> None:
             "model": model,
             "choices": [{
                 "index": 0,
-                "message": {"role": "assistant", "content": "agent-fallback-ok"},
+                "message": {"role": "assistant", "content": "fallback-ok"},
                 "finish_reason": "stop",
             }],
         })
@@ -431,6 +432,7 @@ async def test_agent_runner_failover_integration() -> None:
     await server.start_server()
     try:
         from nanobot.providers.openai_compat_provider import OpenAICompatProvider
+        from nanobot.providers.failover import ModelRouter
 
         base_url = str(server.make_url("/"))
         primary = OpenAICompatProvider(
@@ -442,27 +444,23 @@ async def test_agent_runner_failover_integration() -> None:
 
         factory = MagicMock(return_value=fallback)
 
-        runner = AgentRunner(
-            primary,
+        router = ModelRouter(
+            primary_provider=primary,
+            primary_model="primary-model",
+            fallback_models=["fallback-model"],
             provider_factory=factory,
-            fallback_models=["fallback-model"],
-        )
-
-        spec = AgentRunSpec(
-            initial_messages=[{"role": "user", "content": "hello"}],
-            tools=ToolRegistry(),
-            model="primary-model",
-            max_iterations=1,
-            max_tool_result_chars=8000,
-            fallback_models=["fallback-model"],
         )
 
         with patch.object(LLMProvider, "_CHAT_RETRY_DELAYS", (0,)):
-            result = await runner.run(spec)
+            response = await router.chat_with_retry(
+                messages=[{"role": "user", "content": "hello"}],
+            )
 
-        assert result.final_content == "agent-fallback-ok"
+        assert response.finish_reason != "error"
+        assert response.content == "fallback-ok"
         models_requested = [r["model"] for r in requests_log]
         assert "primary-model" in models_requested
         assert "fallback-model" in models_requested
+        factory.assert_called_once_with("fallback-model")
     finally:
         await server.close()

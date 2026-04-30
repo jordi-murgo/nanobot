@@ -204,3 +204,30 @@ def test_resolve_preset_overrides_all_model_fields() -> None:
 def test_empty_model_presets_dict_is_harmless() -> None:
     cfg = Config.model_validate({"model_presets": {}})
     assert cfg.resolve_preset().model == "anthropic/claude-opus-4-5"
+
+
+def test_factory_uses_preset_provider_not_defaults() -> None:
+    """When creating a provider for a non-active preset, the preset's own provider must be used."""
+    from nanobot.providers.factory import make_provider_factory
+
+    cfg = Config.model_validate({
+        "model_presets": {
+            "kimi": {"model": "kimi-k2.6", "provider": "moonshot"},
+            "zhipu": {"model": "glm-5.1", "provider": "zhipu"},
+        },
+        "providers": {
+            "moonshot": {"api_key": "moonshot-key", "api_base": "https://api.moonshot.ai/v1"},
+            "zhipu": {"api_key": "zhipu-key", "api_base": "https://open.bigmodel.cn/api/paas/v4"},
+        },
+        "agents": {"defaults": {"model_preset": "kimi"}},
+    })
+
+    factory = make_provider_factory(cfg)
+    zhipu_provider = factory("zhipu")
+
+    assert zhipu_provider.api_base == "https://open.bigmodel.cn/api/paas/v4"
+    assert getattr(zhipu_provider, "api_key", None) == "zhipu-key"
+
+    # Also verify the active preset provider is still correct
+    moonshot_provider = factory("kimi")
+    assert moonshot_provider.api_base == "https://api.moonshot.ai/v1"

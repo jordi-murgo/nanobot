@@ -220,6 +220,18 @@ class AgentLoop:
         defaults = AgentDefaults()
         self.bus = bus
         self.channels_config = channels_config
+        self.provider_factory = provider_factory
+        self.fallback_models = fallback_models or []
+        # Wrap provider with failover router so *all* LLM consumers (runner,
+        # consolidator, dream, subagents) share the same fallback chain.
+        if fallback_models and provider_factory:
+            from nanobot.providers.failover import ModelRouter
+            provider = ModelRouter(
+                primary_provider=provider,
+                primary_model=model or provider.get_default_model(),
+                fallback_models=fallback_models,
+                provider_factory=provider_factory,
+            )
         self.provider = provider
         self._provider_snapshot_loader = provider_snapshot_loader
         self._provider_signature = provider_signature
@@ -240,7 +252,6 @@ class AgentLoop:
             else defaults.max_tool_result_chars
         )
         self.provider_retry_mode = provider_retry_mode
-        self.fallback_models = fallback_models or []
         self.web_config = web_config or WebToolsConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
@@ -251,11 +262,7 @@ class AgentLoop:
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
-        self.runner = AgentRunner(
-            provider,
-            provider_factory=provider_factory,
-            fallback_models=fallback_models,
-        )
+        self.runner = AgentRunner(provider)
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
@@ -330,6 +337,14 @@ class AgentLoop:
         if self.provider is provider and self.model == model:
             return
         old_model = self.model
+        if self.fallback_models and self.provider_factory:
+            from nanobot.providers.failover import ModelRouter
+            provider = ModelRouter(
+                primary_provider=provider,
+                primary_model=model,
+                fallback_models=self.fallback_models,
+                provider_factory=self.provider_factory,
+            )
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
@@ -338,6 +353,8 @@ class AgentLoop:
         self.consolidator.set_provider(provider, model, context_window_tokens)
         self.dream.set_provider(provider, model)
         self._provider_signature = snapshot.signature
+        if self._active_preset and self.model_presets.get(self._active_preset, ModelPresetConfig(model="")).model != model:
+            self._active_preset = None
         logger.info("Runtime model switched for next turn: {} -> {}", old_model, model)
 
     def _refresh_provider_snapshot(self) -> None:
@@ -368,11 +385,28 @@ class AgentLoop:
         p = self.model_presets[name]
         self.model = p.model
         self.context_window_tokens = p.context_window_tokens
-        self.provider.generation = GenerationSettings(
-            temperature=p.temperature,
-            max_tokens=p.max_tokens,
-            reasoning_effort=p.reasoning_effort,
-        )
+        if getattr(self, "provider_factory", None) is not None:
+            new_provider = self.provider_factory(name)
+            if self.fallback_models:
+                from nanobot.providers.failover import ModelRouter
+                new_provider = ModelRouter(
+                    primary_provider=new_provider,
+                    primary_model=p.model,
+                    fallback_models=self.fallback_models,
+                    provider_factory=self.provider_factory,
+                )
+            if new_provider is not self.provider:
+                self.provider = new_provider
+                self.runner.provider = new_provider
+                self.subagents.set_provider(new_provider, p.model)
+                self.consolidator.set_provider(new_provider, p.model, p.context_window_tokens)
+                self.dream.set_provider(new_provider, p.model)
+        else:
+            self.provider.generation = GenerationSettings(
+                temperature=p.temperature,
+                max_tokens=p.max_tokens,
+                reasoning_effort=p.reasoning_effort,
+            )
         self._active_preset = name
 
     def _register_default_tools(self) -> None:
@@ -665,7 +699,6 @@ class AgentLoop:
             context_window_tokens=self.context_window_tokens,
             context_block_limit=self.context_block_limit,
             provider_retry_mode=self.provider_retry_mode,
-            fallback_models=self.fallback_models,
             progress_callback=on_progress,
             retry_wait_callback=on_retry_wait,
             checkpoint_callback=_checkpoint,
