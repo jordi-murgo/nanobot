@@ -611,10 +611,25 @@ def _handle_model_preset_field(
         setattr(working_model, field_name, new_value)
 
 
+def _handle_provider_field(
+    working_model: BaseModel, field_name: str, field_display: str, current_value: Any
+) -> None:
+    """Handle the 'provider' field with a list of registered providers."""
+    provider_names = sorted(_get_provider_names().keys())
+    choices = ["auto"] + provider_names
+    default_choice = str(current_value) if current_value else "auto"
+    new_value = _select_with_back(field_display, choices, default=default_choice)
+    if new_value is _BACK_PRESSED:
+        return
+    if new_value is not None:
+        setattr(working_model, field_name, new_value)
+
+
 _FIELD_HANDLERS: dict[str, Any] = {
     "model": _handle_model_field,
     "context_window_tokens": _handle_context_window_field,
     "model_preset": _handle_model_preset_field,
+    "provider": _handle_provider_field,
 }
 
 

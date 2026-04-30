@@ -1166,3 +1166,31 @@ class TestModelPresetWizard:
         _show_summary(config)
 
         assert "Model Presets" in panels
+
+    def test_provider_field_handler(self, monkeypatch):
+        """_handle_provider_field should set a provider from the registry list."""
+        from nanobot.cli.onboard import _handle_provider_field
+        from nanobot.config.schema import ModelPresetConfig
+
+        monkeypatch.setattr(
+            onboard_wizard, "_get_provider_names", lambda: {"moonshot": "Moonshot", "openai": "OpenAI"}
+        )
+        monkeypatch.setattr(onboard_wizard, "_select_with_back", lambda *a, **kw: "moonshot")
+
+        preset = ModelPresetConfig(model="x")
+        _handle_provider_field(preset, "provider", "Provider", "auto")
+        assert preset.provider == "moonshot"
+
+    def test_provider_field_handler_back_pressed(self, monkeypatch):
+        """_handle_provider_field should not modify value when back is pressed."""
+        from nanobot.cli.onboard import _handle_provider_field, _BACK_PRESSED
+        from nanobot.config.schema import ModelPresetConfig
+
+        monkeypatch.setattr(
+            onboard_wizard, "_get_provider_names", lambda: {"moonshot": "Moonshot"}
+        )
+        monkeypatch.setattr(onboard_wizard, "_select_with_back", lambda *a, **kw: _BACK_PRESSED)
+
+        preset = ModelPresetConfig(model="x", provider="auto")
+        _handle_provider_field(preset, "provider", "Provider", "auto")
+        assert preset.provider == "auto"
