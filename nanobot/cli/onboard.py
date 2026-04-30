@@ -22,7 +22,7 @@ from nanobot.cli.models import (
     get_model_suggestions,
 )
 from nanobot.config.loader import get_config_path, load_config
-from nanobot.config.schema import Config
+from nanobot.config.schema import Config, ModelPresetConfig
 
 console = Console()
 
@@ -48,6 +48,10 @@ _SELECT_FIELD_HINTS: dict[str, tuple[list[str], str]] = {
 # --- Key Bindings for Navigation ---
 
 _BACK_PRESSED = object()  # Sentinel value for back navigation
+
+# Cache of model-preset names populated at runtime so that field handlers can
+# offer existing presets as choices (e.g. AgentDefaults.model_preset).
+_MODEL_PRESET_CACHE: set[str] = set()
 
 
 def _get_questionary():
@@ -588,9 +592,29 @@ def _handle_context_window_field(
         setattr(working_model, field_name, new_value)
 
 
+def _handle_model_preset_field(
+    working_model: BaseModel, field_name: str, field_display: str, current_value: Any
+) -> None:
+    """Handle the 'model_preset' field with a list of existing presets."""
+    # model_preset lives on AgentDefaults, but the preset list is on Config.
+    # We can't easily access Config here, so we read from the global config
+    # via a module-level cache set by _configure_model_presets / run_onboard.
+    preset_names = sorted(_MODEL_PRESET_CACHE)
+    choices = ["(clear/unset)"] + preset_names
+    default_choice = str(current_value) if current_value else "(clear/unset)"
+    new_value = _select_with_back(field_display, choices, default=default_choice)
+    if new_value is _BACK_PRESSED:
+        return
+    if new_value == "(clear/unset)":
+        setattr(working_model, field_name, None)
+    elif new_value is not None:
+        setattr(working_model, field_name, new_value)
+
+
 _FIELD_HANDLERS: dict[str, Any] = {
     "model": _handle_model_field,
     "context_window_tokens": _handle_context_window_field,
+    "model_preset": _handle_model_preset_field,
 }
 
 
@@ -731,6 +755,97 @@ def _try_auto_fill_context_window(model: BaseModel, new_model_name: str) -> None
         console.print(f"[green]+ Auto-filled context window: {format_token_count(context_limit)} tokens[/green]")
     else:
         console.print("[dim](i) Could not auto-fill context window (model not in database)[/dim]")
+
+
+# --- Model Preset Configuration ---
+
+
+def _sync_preset_cache(config: Config) -> None:
+    """Synchronise the module-level preset name cache from config."""
+    _MODEL_PRESET_CACHE.clear()
+    _MODEL_PRESET_CACHE.update(config.model_presets.keys())
+
+
+def _configure_model_presets(config: Config) -> None:
+    """Configure model presets (CRUD)."""
+    _sync_preset_cache(config)
+
+    def get_preset_choices() -> list[str]:
+        choices: list[str] = []
+        for name, preset in config.model_presets.items():
+            choices.append(f"{name} ({preset.model})")
+        choices.append("[+] Add new preset")
+        choices.append("<- Back")
+        return choices
+
+    while True:
+        try:
+            console.clear()
+            _show_section_header(
+                "Model Presets",
+                "Create, edit or delete named model presets for quick switching",
+            )
+            choices = get_preset_choices()
+            answer = _select_with_back("Select preset:", choices)
+
+            if answer is _BACK_PRESSED or answer is None or answer == "<- Back":
+                break
+
+            assert isinstance(answer, str)
+
+            if answer == "[+] Add new preset":
+                name_input = _get_questionary().text(
+                    "Preset name:",
+                    validate=lambda t: True if t and t.strip() else "Name cannot be empty",
+                ).ask()
+                if not name_input:
+                    continue
+                name = name_input.strip()
+                if name in config.model_presets:
+                    console.print(f"[yellow]! Preset '{name}' already exists[/yellow]")
+                    _pause()
+                    continue
+                new_preset = ModelPresetConfig(model="")
+                updated = _configure_pydantic_model(new_preset, f"New Preset: {name}")
+                if updated is not None:
+                    config.model_presets[name] = updated
+                    _sync_preset_cache(config)
+                continue
+
+            # Editing / deleting an existing preset
+            # Extract preset name from "name (model)" format
+            preset_name = answer.split(" (", 1)[0]
+            preset = config.model_presets.get(preset_name)
+            if preset is None:
+                continue
+
+            action = _select_with_back(
+                f"Preset: {preset_name}",
+                ["Edit", "Delete", "Cancel"],
+                default="Edit",
+            )
+            if action is _BACK_PRESSED or action == "Cancel" or action is None:
+                continue
+
+            if action == "Delete":
+                confirm = _get_questionary().confirm(
+                    f"Delete preset '{preset_name}'?",
+                    default=False,
+                ).ask()
+                if confirm:
+                    del config.model_presets[preset_name]
+                    _sync_preset_cache(config)
+                continue
+
+            if action == "Edit":
+                updated = _configure_pydantic_model(preset, f"Edit Preset: {preset_name}")
+                if updated is not None:
+                    config.model_presets[preset_name] = updated
+                    _sync_preset_cache(config)
+
+        except KeyboardInterrupt:
+            console.print("\n[dim]Returning to main menu...[/dim]")
+            break
 
 
 # --- Provider Configuration ---
@@ -1003,6 +1118,12 @@ def _show_summary(config: Config) -> None:
         channel_rows.append((display, status))
     _print_summary_panel(channel_rows, "Chat Channels")
 
+    # Model Presets
+    preset_rows = []
+    for name, preset in config.model_presets.items():
+        preset_rows.append((name, f"{preset.model} (ctx={preset.context_window_tokens})"))
+    _print_summary_panel(preset_rows, "Model Presets")
+
     # Settings sections
     for title, model in [
         ("Agent Settings", config.agents.defaults),
@@ -1072,6 +1193,7 @@ def run_onboard(initial_config: Config | None = None) -> OnboardResult:
 
     original_config = base_config.model_copy(deep=True)
     config = base_config.model_copy(deep=True)
+    _sync_preset_cache(config)
 
     while True:
         console.clear()
@@ -1082,6 +1204,7 @@ def run_onboard(initial_config: Config | None = None) -> OnboardResult:
                 "What would you like to configure?",
                 choices=[
                     "[P] LLM Provider",
+                    "[M] Model Presets",
                     "[C] Chat Channel",
                     "[H] Channel Common",
                     "[A] Agent Settings",
@@ -1107,6 +1230,7 @@ def run_onboard(initial_config: Config | None = None) -> OnboardResult:
 
         _MENU_DISPATCH = {
             "[P] LLM Provider": lambda: _configure_providers(config),
+            "[M] Model Presets": lambda: _configure_model_presets(config),
             "[C] Chat Channel": lambda: _configure_channels(config),
             "[H] Channel Common": lambda: _configure_general_settings(config, "Channel Common"),
             "[A] Agent Settings": lambda: _configure_general_settings(config, "Agent Settings"),

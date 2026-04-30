@@ -319,23 +319,10 @@ def onboard(
                 )
     else:
         config = _apply_workspace_override(Config())
-
-        # Auto-detect provider from environment variables (first run only)
+        # In wizard mode, don't save yet - the wizard will handle saving if should_save=True
         if not wizard:
-            from nanobot.cli.auto_onboard import _auto_detect_provider, _apply_auto_detect
-
-            detected = _auto_detect_provider()
-            if detected:
-                _apply_auto_detect(config, detected)
-                save_config(config, config_path)
-                console.print(f"[green]✓[/green] Auto-detected provider: {detected.provider_name}")
-                console.print(f"[green]✓[/green] Model: {config.agents.defaults.model}")
-                console.print(f"[green]✓[/green] Config saved at {config_path}")
-            else:
-                save_config(config, config_path)
-                console.print(f"[green]✓[/green] Created config at {config_path}")
-                console.print("[yellow]No API key detected in environment.[/yellow]")
-                console.print("  Run [cyan]nanobot onboard --wizard[/cyan] to configure interactively.")
+            save_config(config, config_path)
+            console.print(f"[green]✓[/green] Created config at {config_path}")
 
     # Run interactive wizard if enabled
     if wizard:
@@ -534,6 +521,7 @@ def serve(
     defaults = runtime_config.agents.defaults
     pf = make_provider_factory(runtime_config) if defaults.fallback_models else None
     session_manager = SessionManager(runtime_config.workspace_path)
+    _resolved = runtime_config.resolve_preset()
     agent_loop = _make_agent_loop(
         runtime_config, bus, provider, defaults, pf,
         session_manager=session_manager,

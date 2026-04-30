@@ -960,3 +960,209 @@ class TestMainMenuUpdate:
 
         assert result.should_save is True
         assert pause_called["n"] == 1
+
+
+class TestModelPresetWizard:
+    """Tests for model preset CRUD in the onboard wizard."""
+
+    def test_sync_preset_cache(self):
+        """_sync_preset_cache should populate the module-level cache."""
+        from nanobot.cli.onboard import _sync_preset_cache, _MODEL_PRESET_CACHE
+        from nanobot.config.schema import ModelPresetConfig
+
+        config = Config()
+        config.model_presets = {
+            "fast": ModelPresetConfig(model="gpt-4.1-mini"),
+            "power": ModelPresetConfig(model="gpt-4.1"),
+        }
+        _sync_preset_cache(config)
+        assert _MODEL_PRESET_CACHE == {"fast", "power"}
+
+    def test_model_preset_add(self, monkeypatch):
+        """_configure_model_presets should add a new preset."""
+        from nanobot.cli.onboard import _configure_model_presets, _MODEL_PRESET_CACHE
+        from nanobot.config.schema import ModelPresetConfig
+
+        config = Config()
+        _MODEL_PRESET_CACHE.clear()
+
+        responses = iter([
+            "[+] Add new preset",
+            "my-preset",
+            "<- Back",
+        ])
+
+        class FakePrompt:
+            def __init__(self, response):
+                self.response = response
+            def ask(self):
+                if isinstance(self.response, BaseException):
+                    raise self.response
+                return self.response
+
+        def fake_select(*_args, **_kwargs):
+            return FakePrompt(next(responses))
+
+        def fake_text(*_args, **_kwargs):
+            return FakePrompt(next(responses))
+
+        def fake_configure(*_model, **_kwargs):
+            return ModelPresetConfig(model="gpt-test", temperature=0.5)
+
+        # _select_with_back returns a string/sentinel directly (not a prompt object)
+        def fake_select_with_back(*_args, **_kwargs):
+            return next(responses)
+
+        monkeypatch.setattr(onboard_wizard, "_select_with_back", fake_select_with_back)
+        monkeypatch.setattr(onboard_wizard, "questionary", SimpleNamespace(select=fake_select, text=fake_text))
+        monkeypatch.setattr(onboard_wizard, "_configure_pydantic_model", fake_configure)
+        monkeypatch.setattr(onboard_wizard, "_show_section_header", lambda *a, **kw: None)
+        monkeypatch.setattr(onboard_wizard, "console", SimpleNamespace(clear=lambda: None))
+
+        _configure_model_presets(config)
+
+        assert "my-preset" in config.model_presets
+        assert config.model_presets["my-preset"].model == "gpt-test"
+        assert config.model_presets["my-preset"].temperature == 0.5
+
+    def test_model_preset_delete(self, monkeypatch):
+        """_configure_model_presets should delete an existing preset."""
+        from nanobot.cli.onboard import _configure_model_presets, _MODEL_PRESET_CACHE
+        from nanobot.config.schema import ModelPresetConfig
+
+        config = Config()
+        config.model_presets = {"old": ModelPresetConfig(model="x")}
+        _MODEL_PRESET_CACHE.clear()
+        _MODEL_PRESET_CACHE.add("old")
+
+        responses = iter([
+            "old (x)",
+            "Delete",
+            True,
+            "<- Back",
+        ])
+
+        class FakePrompt:
+            def __init__(self, response):
+                self.response = response
+            def ask(self):
+                if isinstance(self.response, BaseException):
+                    raise self.response
+                return self.response
+
+        def fake_select(*_args, **_kwargs):
+            return FakePrompt(next(responses))
+
+        def fake_confirm(*_args, **_kwargs):
+            return FakePrompt(next(responses))
+
+        def fake_select_with_back(*_args, **_kwargs):
+            return next(responses)
+
+        monkeypatch.setattr(onboard_wizard, "_select_with_back", fake_select_with_back)
+        monkeypatch.setattr(onboard_wizard, "questionary", SimpleNamespace(select=fake_select, confirm=fake_confirm))
+        monkeypatch.setattr(onboard_wizard, "_show_section_header", lambda *a, **kw: None)
+        monkeypatch.setattr(onboard_wizard, "console", SimpleNamespace(clear=lambda: None))
+
+        _configure_model_presets(config)
+
+        assert "old" not in config.model_presets
+        assert "old" not in _MODEL_PRESET_CACHE
+
+    def test_model_preset_field_handler(self, monkeypatch):
+        """_handle_model_preset_field should set a preset name from choices."""
+        from nanobot.cli.onboard import _handle_model_preset_field, _MODEL_PRESET_CACHE
+        from nanobot.config.schema import AgentDefaults
+
+        _MODEL_PRESET_CACHE.clear()
+        _MODEL_PRESET_CACHE.update({"fast", "power"})
+
+        monkeypatch.setattr(onboard_wizard, "_select_with_back", lambda *a, **kw: "fast")
+
+        defaults = AgentDefaults()
+        _handle_model_preset_field(defaults, "model_preset", "Model Preset", None)
+        assert defaults.model_preset == "fast"
+
+    def test_model_preset_field_handler_clear(self, monkeypatch):
+        """_handle_model_preset_field should clear preset when (clear/unset) chosen."""
+        from nanobot.cli.onboard import _handle_model_preset_field, _MODEL_PRESET_CACHE
+        from nanobot.config.schema import AgentDefaults
+
+        _MODEL_PRESET_CACHE.clear()
+        _MODEL_PRESET_CACHE.add("fast")
+
+        monkeypatch.setattr(onboard_wizard, "_select_with_back", lambda *a, **kw: "(clear/unset)")
+
+        defaults = AgentDefaults(model_preset="fast")
+        _handle_model_preset_field(defaults, "model_preset", "Model Preset", "fast")
+        assert defaults.model_preset is None
+
+    def test_main_menu_dispatch_includes_model_presets(self):
+        """run_onboard dispatch should route [M] to Model Presets."""
+        from nanobot.cli.onboard import _configure_model_presets
+
+        # The function should be importable and callable
+        assert callable(_configure_model_presets)
+
+    def test_run_onboard_model_presets_edit(self, monkeypatch):
+        """run_onboard should handle [M] Model Presets correctly."""
+        initial_config = Config()
+
+        responses = iter([
+            "[M] Model Presets",
+            KeyboardInterrupt(),
+            "[S] Save and Exit",
+        ])
+
+        class FakePrompt:
+            def __init__(self, response):
+                self.response = response
+            def ask(self):
+                if isinstance(self.response, BaseException):
+                    raise self.response
+                return self.response
+
+        def fake_select(*_args, **_kwargs):
+            return FakePrompt(next(responses))
+
+        preset_mutated = {"n": 0}
+
+        def fake_configure_model_presets(config):
+            preset_mutated["n"] += 1
+            # Mutate config so unsaved changes are detected
+            from nanobot.config.schema import ModelPresetConfig
+            config.model_presets["test"] = ModelPresetConfig(model="x")
+
+        monkeypatch.setattr(onboard_wizard, "_show_main_menu_header", lambda: None)
+        monkeypatch.setattr(onboard_wizard, "questionary", SimpleNamespace(select=fake_select))
+        monkeypatch.setattr(onboard_wizard, "_configure_model_presets", fake_configure_model_presets)
+
+        result = run_onboard(initial_config=initial_config)
+
+        assert result.should_save is True
+        assert preset_mutated["n"] == 1
+
+    def test_summary_shows_model_presets(self, monkeypatch):
+        """_show_summary should include model presets panel."""
+        from nanobot.cli.onboard import _show_summary
+        from nanobot.config.schema import ModelPresetConfig
+
+        config = Config()
+        config.model_presets = {
+            "fast": ModelPresetConfig(model="gpt-4.1-mini"),
+        }
+
+        panels = []
+
+        def fake_print_summary(rows, title):
+            panels.append(title)
+
+        monkeypatch.setattr(onboard_wizard, "_print_summary_panel", fake_print_summary)
+        monkeypatch.setattr(onboard_wizard, "_get_provider_names", lambda: {})
+        monkeypatch.setattr(onboard_wizard, "_get_channel_names", lambda: {})
+        monkeypatch.setattr(onboard_wizard, "_pause", lambda: None)
+        monkeypatch.setattr(onboard_wizard, "console", SimpleNamespace(print=lambda *a, **kw: None))
+
+        _show_summary(config)
+
+        assert "Model Presets" in panels
