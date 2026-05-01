@@ -222,7 +222,10 @@ class AgentLoop:
         self.channels_config = channels_config
         self.provider_factory = provider_factory
         self.fallback_models = fallback_models or []
-        self.provider = self._wrap_with_failover(provider, model or provider.get_default_model())
+        _wrapped_provider = self._wrap_with_failover(
+            provider, model or provider.get_default_model()
+        )
+        self.provider = _wrapped_provider
         self._provider_snapshot_loader = provider_snapshot_loader
         self._provider_signature = provider_signature
         self.workspace = workspace
@@ -252,9 +255,9 @@ class AgentLoop:
         self.context = ContextBuilder(workspace, timezone=timezone, disabled_skills=disabled_skills)
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
-        self.runner = AgentRunner(provider)
+        self.runner = AgentRunner(_wrapped_provider)
         self.subagents = SubagentManager(
-            provider=provider,
+            provider=_wrapped_provider,
             workspace=workspace,
             bus=bus,
             model=self.model,
@@ -286,13 +289,13 @@ class AgentLoop:
         )
         self.consolidator = Consolidator(
             store=self.context.memory,
-            provider=provider,
+            provider=_wrapped_provider,
             model=self.model,
             sessions=self.sessions,
             context_window_tokens=self.context_window_tokens,
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
-            max_completion_tokens=provider.generation.max_tokens,
+            max_completion_tokens=_wrapped_provider.generation.max_tokens,
             consolidation_ratio=consolidation_ratio,
         )
         self.auto_compact = AutoCompact(
@@ -302,7 +305,7 @@ class AgentLoop:
         )
         self.dream = Dream(
             store=self.context.memory,
-            provider=provider,
+            provider=_wrapped_provider,
             model=self.model,
         )
         self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}

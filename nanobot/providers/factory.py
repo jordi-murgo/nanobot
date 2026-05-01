@@ -137,6 +137,7 @@ def make_provider_factory(config: Config):
 def provider_signature(config: Config) -> tuple[object, ...]:
     """Return the config fields that affect the primary LLM provider."""
     resolved = config.resolve_preset()
+    defaults = config.agents.defaults
     return (
         resolved.model,
         resolved.provider,
@@ -147,6 +148,7 @@ def provider_signature(config: Config) -> tuple[object, ...]:
         resolved.temperature,
         resolved.reasoning_effort,
         resolved.context_window_tokens,
+        tuple(defaults.fallback_models),
     )
 
 

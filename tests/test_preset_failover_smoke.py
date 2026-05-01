@@ -207,6 +207,42 @@ async def test_preset_model_with_fallback_models_in_config(tmp_path: Path) -> No
     assert loop.provider.fallback_models == ["fallback-model"]
 
 
+@pytest.mark.asyncio
+async def test_fallback_models_wired_to_all_subsystems(tmp_path: Path) -> None:
+    """When fallback_models is configured, every subsystem that calls the LLM
+    must use the same ModelRouter instance, not the raw primary provider."""
+    config_path = _write_config(
+        tmp_path,
+        model_presets={
+            "prod": {
+                "model": "gpt-4.1",
+                "provider": "openai",
+                "max_tokens": 8192,
+                "temperature": 0.1,
+            }
+        },
+        agents={
+            "defaults": {
+                "model_preset": "prod",
+                "fallback_models": ["fallback-model"],
+            }
+        },
+    )
+
+    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
+        bot = Nanobot.from_config(config_path, workspace=tmp_path)
+
+    loop = bot._loop
+    router = loop.provider
+    assert isinstance(router, ModelRouter)
+
+    # Every LLM-consuming subsystem must share the same router
+    assert loop.runner.provider is router, "AgentRunner must use ModelRouter"
+    assert loop.subagents.provider is router, "SubagentManager must use ModelRouter"
+    assert loop.consolidator.provider is router, "Consolidator must use ModelRouter"
+    assert loop.dream.provider is router, "Dream must use ModelRouter"
+
+
 # ---------------------------------------------------------------------------
 # 2. Real HTTP Smoke Tests (aiohttp fake OpenAI server)
 # ---------------------------------------------------------------------------
