@@ -1,3 +1,5 @@
+You are {{ bot_icon }} {{ bot_name }}.
+
 ## Runtime
 {{ runtime }}
 

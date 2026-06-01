@@ -3,84 +3,65 @@
 import base64
 import mimetypes
 import platform
+from contextlib import suppress
+from importlib.resources import files as pkg_files
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills import SkillsLoader
-from nanobot.agent.tools import mcp as mcp_tools
-from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.apps.cli import utils as cli_app_utils
-from nanobot.bus.events import InboundMessage
 from nanobot.session.goal_state import goal_state_runtime_lines
 from nanobot.utils.helpers import (
     current_time_str,
     detect_image_mime,
-    load_bundled_template,
     truncate_text,
 )
 from nanobot.utils.prompt_templates import render_template
 
 
-def session_extra(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return persisted kwargs for turn-attached capabilities."""
-    return cli_app_utils.session_extra(metadata) | mcp_tools.session_extra(metadata)
-
-
-def runtime_lines(state: Any, msg: Any, workspace: Path, *, skip: bool = False) -> list[str]:
-    """Return model-visible runtime annotations for turn-attached capabilities."""
-    return [
-        *cli_app_utils.runtime_lines(msg, workspace, skip=skip),
-        *mcp_tools.runtime_lines(
-            msg,
-            configured_server_names=set(state._mcp_servers),
-            connected_server_names=set(state._mcp_stacks),
-            skip=skip,
-        ),
-    ]
-
-
-async def connect_mcp(state: Any, tools: ToolRegistry) -> None:
-    await mcp_tools.connect_missing_servers(state, tools)
-
-
-async def handle_runtime_control(state: Any, msg: InboundMessage, tools: ToolRegistry) -> bool:
-    return await mcp_tools.handle_runtime_control(state, msg, tools)
-
-
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
-    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md"]
+    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
     _MAX_RECENT_HISTORY = 50
     _MAX_HISTORY_CHARS = 32_000  # hard cap on recent history section size
     _RUNTIME_CONTEXT_END = "[/Runtime Context]"
 
-    def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None):
+    def __init__(self, workspace: Path, timezone: str | None = None, disabled_skills: list[str] | None = None, system_workspace: Path | None = None, bot_name: str = "nanobot", bot_icon: str = "🐈", sandbox_workspace: Path | None = None):
         self.workspace = workspace
         self.timezone = timezone
-        self.memory = MemoryStore(workspace)
-        self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
+        self.bot_name = bot_name
+        self.bot_icon = bot_icon
+        self.system_workspace = system_workspace
+        self.sandbox_workspace = sandbox_workspace
+        self.memory = MemoryStore(workspace, system_workspace=system_workspace)
+        self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None, system_workspace=system_workspace)
 
     def build_system_prompt(
         self,
         skill_names: list[str] | None = None,
         channel: str | None = None,
         session_summary: str | None = None,
-        workspace: Path | None = None,
+        team_workspace: Path | None = None,
+        system_workspace: Path | None = None,
     ) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
-        root = workspace or self.workspace
-        parts = [self._get_identity(channel=channel, workspace=root)]
+        parts = [self._get_identity(channel=channel)]
 
-        bootstrap = self._load_bootstrap_files(root)
+        bootstrap = self._load_bootstrap_files(system_workspace=system_workspace)
         if bootstrap:
             parts.append(bootstrap)
 
-        parts.append(render_template("agent/tool_contract.md"))
+        # Team context (before memory)
+        if team_workspace is not None:
+            team_md = team_workspace / "TEAM.md"
+            if team_md.exists():
+                team_content = team_md.read_text(encoding="utf-8").strip()
+                if team_content:
+                    parts.append(f"## Team Context\n\n{team_content}")
 
-        memory = self.memory.get_memory_context()
+        memory = self.memory.get_memory_context(team_workspace=team_workspace)
         if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
             parts.append(f"# Memory\n\n{memory}")
 
@@ -108,10 +89,9 @@ class ContextBuilder:
 
         return "\n\n---\n\n".join(parts)
 
-    def _get_identity(self, channel: str | None = None, workspace: Path | None = None) -> str:
+    def _get_identity(self, channel: str | None = None) -> str:
         """Get the core identity section."""
-        root = workspace or self.workspace
-        workspace_path = str(root.expanduser().resolve())
+        workspace_path = str((self.sandbox_workspace or self.workspace).expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
@@ -121,6 +101,8 @@ class ContextBuilder:
             runtime=runtime,
             platform_policy=render_template("agent/platform_policy.md", system=system),
             channel=channel or "",
+            bot_name=self.bot_name,
+            bot_icon=self.bot_icon,
         )
 
     @staticmethod
@@ -155,25 +137,37 @@ class ContextBuilder:
 
         return _to_blocks(left) + _to_blocks(right)
 
-    def _load_bootstrap_files(self, workspace: Path | None = None) -> str:
-        """Load all bootstrap files from workspace."""
+    def _load_bootstrap_files(self, system_workspace: Path | None = None) -> str:
+        """Load all bootstrap files with overlay merge: system + user workspace."""
         parts = []
-        root = workspace or self.workspace
 
         for filename in self.BOOTSTRAP_FILES:
-            file_path = root / filename
-            if file_path.exists():
-                content = file_path.read_text(encoding="utf-8")
-                parts.append(f"## {filename}\n\n{content}")
+            contents = []
+
+            if system_workspace is not None:
+                system_path = system_workspace / filename
+                if system_path.exists():
+                    contents.append(system_path.read_text(encoding="utf-8"))
+
+            user_path = self.workspace / filename
+            if user_path.exists():
+                contents.append(user_path.read_text(encoding="utf-8"))
+
+            if contents:
+                merged = "\n\n---\n\n".join(contents)
+                ref = str(self.sandbox_workspace / filename) if self.sandbox_workspace else f"workspace/{filename}"
+                header = f"[Injected: {ref}]\n\n## {filename}"
+                parts.append(f"{header}\n\n{merged}")
 
         return "\n\n".join(parts) if parts else ""
 
     @staticmethod
     def _is_template_content(content: str, template_path: str) -> bool:
         """Check if *content* is identical to the bundled template (user hasn't customized it)."""
-        tpl = load_bundled_template(template_path)
-        if tpl is not None:
-            return content.strip() == tpl.strip()
+        with suppress(Exception):
+            tpl = pkg_files("nanobot") / "templates" / template_path
+            if tpl.is_file():
+                return content.strip() == tpl.read_text(encoding="utf-8").strip()
         return False
 
     def build_messages(
@@ -188,21 +182,11 @@ class ContextBuilder:
         sender_id: str | None = None,
         session_summary: str | None = None,
         session_metadata: Mapping[str, Any] | None = None,
-        current_runtime_lines: Sequence[str] | None = None,
-        workspace: Path | None = None,
-        runtime_state: Any | None = None,
-        inbound_message: Any | None = None,
-        skip_runtime_lines: bool = False,
+        team_workspace: Path | None = None,
+        system_workspace: Path | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
-        root = workspace or self.workspace
-        extra = [
-            *goal_state_runtime_lines(session_metadata),
-        ]
-        if runtime_state is not None and inbound_message is not None:
-            extra.extend(runtime_lines(runtime_state, inbound_message, root, skip=skip_runtime_lines))
-        if current_runtime_lines:
-            extra.extend(line for line in current_runtime_lines if line)
+        extra = goal_state_runtime_lines(session_metadata)
         runtime_ctx = self._build_runtime_context(
             channel,
             chat_id,
@@ -227,7 +211,8 @@ class ContextBuilder:
                     skill_names,
                     channel=channel,
                     session_summary=session_summary,
-                    workspace=root,
+                    team_workspace=team_workspace,
+                    system_workspace=system_workspace,
                 ),
             },
             *history,
@@ -264,3 +249,4 @@ class ContextBuilder:
         if not images:
             return text
         return images + [{"type": "text", "text": text}]
+
