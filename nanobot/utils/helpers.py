@@ -637,3 +637,70 @@ def load_bundled_template(template_name: str) -> str | None:
         if tpl.is_file():
             return tpl.read_text(encoding="utf-8")
     return None
+
+
+def ensure_user_workspace(user_workspace: Path, silent: bool = False) -> list[str]:
+    """Ensure a user workspace directory exists with template files and git init.
+
+    Creates memory/ and skills/ dirs, copies SOUL.md, USER.md, and
+    memory/MEMORY.md from templates if they don't exist, creates an
+    empty memory/history.jsonl, and initializes a git repo.
+
+    Returns list of relative paths that were created.
+    """
+    from importlib.resources import files as pkg_files
+
+    try:
+        tpl = pkg_files("nanobot") / "templates"
+    except Exception:
+        return []
+    if not tpl.is_dir():
+        return []
+
+    added: list[str] = []
+    memory_dir = ensure_dir(user_workspace / "memory")
+    ensure_dir(user_workspace / "skills")
+
+    def _write(src, dest: Path):
+        if dest.exists():
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")
+        added.append(str(dest.relative_to(user_workspace)))
+
+    for name in ("SOUL.md", "USER.md"):
+        src = tpl / name
+        if src.is_file():
+            _write(src, user_workspace / name)
+
+    src = tpl / "memory" / "MEMORY.md"
+    if src.is_file():
+        _write(src, memory_dir / "MEMORY.md")
+
+    hist_file = memory_dir / "history.jsonl"
+    if not hist_file.exists():
+        hist_file.write_text("", encoding="utf-8")
+        added.append("memory/history.jsonl")
+
+    if added and not silent:
+        from rich.console import Console
+
+        for name in added:
+            Console().print(f"  [dim]Created {name}[/dim]")
+
+    try:
+        from nanobot.utils.gitstore import GitStore
+
+        gs = GitStore(
+            user_workspace,
+            tracked_files=[
+                "SOUL.md",
+                "USER.md",
+                "memory/MEMORY.md",
+            ],
+        )
+        gs.init()
+    except Exception:
+        logger.exception("Failed to initialize git store for {}", user_workspace)
+
+    return added
